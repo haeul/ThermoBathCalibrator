@@ -207,35 +207,41 @@ namespace ThermoBathCalibrator
             }
         }
 
-        // 추가: 멀티보드 Modbus TCP 테스트(FC03 0~12 읽기)
+        // 멀티보드 Modbus TCP 테스트(FC03 0~13 읽기, TJ 포함)
         private void BtnTestMb_Click(object? sender, EventArgs e)
         {
+            MultiBoardModbusClient? c = null;
+
             try
             {
                 var s = ReadFromUi();
                 var mb = s.MultiBoard;
 
-                using (var c = new MultiBoardModbusClient(mb.Host, mb.Port, (byte)mb.UnitId))
+                c = new MultiBoardModbusClient(mb.Host, mb.Port, (byte)mb.UnitId);
+
+                if (!c.TryConnect(out string errConn))
                 {
-                    if (!c.TryConnect(out string errConn))
-                    {
-                        Log($"MULTI CONNECT FAIL: {errConn}");
-                        return;
-                    }
-
-                    if (!c.TryReadHoldingRegisters(0, 13, out ushort[] regs, out string errRead))
-                    {
-                        Log($"MULTI READ FAIL: {errRead}");
-                        return;
-                    }
-
-                    Log($"MULTI READ OK: {mb.Host}:{mb.Port} Unit={mb.UnitId}");
-                    Log($"REG0..12 = {string.Join(", ", regs.Select(x => x.ToString()))}");
+                    Log($"MULTI CONNECT FAIL: {errConn}");
+                    return;
                 }
+
+                // 맵 수정 반영: 0~13 => count=14
+                if (!c.TryReadHoldingRegisters(0, 14, out ushort[] regs, out string errRead))
+                {
+                    Log($"MULTI READ FAIL: {errRead}");
+                    return;
+                }
+
+                Log($"MULTI READ OK: {mb.Host}:{mb.Port} Unit={mb.UnitId}");
+                Log($"REG0..13 = {string.Join(", ", regs.Select(x => x.ToString()))}");
             }
             catch (Exception ex)
             {
                 Log($"MULTI TEST EX: {ex.Message}");
+            }
+            finally
+            {
+                try { c?.Disconnect(); } catch { }
             }
         }
 

@@ -1,8 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -44,6 +46,16 @@ namespace ThermoBathCalibrator
         private int _port = 13000;
         private byte _unitId = 1;
 
+        // ===== CSV Logging (추가) =====
+        private readonly object _csvSync = new object();
+        private string _csvPath = "";
+        private bool _csvHeaderWritten;
+        private DateTime _csvDay = DateTime.MinValue;
+
+        // 재연결 과도 시도 방지(최소 변경)
+        private long _lastReconnectTick;
+        private const int ReconnectCooldownMs = 800;
+
         public FormMain()
         {
             InitializeComponent();
@@ -78,6 +90,9 @@ namespace ThermoBathCalibrator
             ResetConnectionState();
             UpdateStatusLabels();
             UpdateTopNumbers(double.NaN, double.NaN, double.NaN);
+
+            // CSV 파일 경로 초기화
+            PrepareCsvPath(DateTime.Now);
         }
 
         private void LoadMultiBoardSettingsFromDiskIfAny()
@@ -174,9 +189,11 @@ namespace ThermoBathCalibrator
         {
             if (_running) return;
 
+            PrepareCsvPath(DateTime.Now);
+
             if (!_mb.IsConnected)
             {
-                _boardConnected = _mb.TryConnect(out _);
+                _boardConnected = TryConnectWithCooldown();
                 if (!_boardConnected) _boardFailCount++;
             }
 
@@ -230,6 +247,8 @@ namespace ThermoBathCalibrator
         private void LoopOnce()
         {
             DateTime now = DateTime.Now;
+
+            PrepareCsvPath(now);
 
             bool readOk = TryReadMultiBoard(out MultiBoardSnapshot snap);
 
@@ -301,10 +320,24 @@ namespace ThermoBathCalibrator
             AppendRowToGrid(row);
             AppendRowToHistory(row);
 
+            // ===== CSV 저장(추가) =====
+            AppendCsvRow(row);
+
             UpdateStatusLabels();
 
             pnlCh1Graph.Invalidate();
             pnlCh2Graph.Invalidate();
+        }
+
+        private bool TryConnectWithCooldown()
+        {
+            long now = Environment.TickCount64;
+            long elapsed = now - _lastReconnectTick;
+            if (elapsed < ReconnectCooldownMs)
+                return false;
+
+            _lastReconnectTick = now;
+            return _mb.TryConnect(out _);
         }
 
         private bool TryReadMultiBoard(out MultiBoardSnapshot snap)
@@ -313,7 +346,7 @@ namespace ThermoBathCalibrator
 
             if (!_mb.IsConnected)
             {
-                _boardConnected = _mb.TryConnect(out _);
+                _boardConnected = TryConnectWithCooldown();
                 if (!_boardConnected) _boardFailCount++;
             }
 
@@ -365,11 +398,12 @@ namespace ThermoBathCalibrator
             short ch2OffRaw = unchecked((short)r[11]);
 
             // 채널별 외부 온도계 값: 1/1000℃
-            int ch1ExtRaw = unchecked((short)r[5]);
-            int ch2ExtRaw = unchecked((short)r[12]);
+            // NOTE: WORD(low)라서 음수 해석 필요 없으므로 ushort -> int
+            int ch1ExtRaw = r[5];
+            int ch2ExtRaw = r[12];
 
             // TJ: 외부 온도계 내부 값 (reg 13), 1/1000℃
-            int tjRaw = unchecked((short)r[13]);
+            int tjRaw = r[13];
 
             return new MultiBoardSnapshot
             {
@@ -395,7 +429,7 @@ namespace ThermoBathCalibrator
         {
             if (!_mb.IsConnected)
             {
-                _boardConnected = _mb.TryConnect(out _);
+                _boardConnected = TryConnectWithCooldown();
                 if (!_boardConnected) _boardFailCount++;
             }
 
@@ -418,6 +452,7 @@ namespace ThermoBathCalibrator
                 if (!_mb.TryWriteMultipleRegisters(start: 20, values: new ushort[] { cmd, svWord, offsetWord }, out string err1))
                     return false;
 
+                // cmd clear(기존 그대로)
                 _mb.TryWriteMultipleRegisters(start: 20, values: new ushort[] { 0 }, out _);
                 return true;
             }
@@ -685,6 +720,98 @@ namespace ThermoBathCalibrator
         {
             PropertyInfo prop = typeof(Control).GetProperty("DoubleBuffered", BindingFlags.Instance | BindingFlags.NonPublic);
             prop?.SetValue(c, true, null);
+        }
+
+        // ===== CSV helpers (추가) =====
+        private void PrepareCsvPath(DateTime now)
+        {
+            // 날짜 바뀌면 새 파일로
+            DateTime day = now.Date;
+            if (_csvDay == day && !string.IsNullOrWhiteSpace(_csvPath)) return;
+
+            _csvDay = day;
+            _csvHeaderWritten = false;
+
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            string dataDir = Path.Combine(baseDir, "Data");
+            Directory.CreateDirectory(dataDir);
+
+            string fileName = $"thermo_log_{day:yyyyMMdd}.csv";
+            _csvPath = Path.Combine(dataDir, fileName);
+
+            // 이미 존재하면 헤더는 있다고 가정(최소 변경)
+            if (File.Exists(_csvPath) && new FileInfo(_csvPath).Length > 0)
+                _csvHeaderWritten = true;
+        }
+
+        private void AppendCsvRow(SampleRow r)
+        {
+            try
+            {
+                lock (_csvSync)
+                {
+                    if (string.IsNullOrWhiteSpace(_csvPath))
+                        PrepareCsvPath(r.Timestamp);
+
+                    bool needHeader = !_csvHeaderWritten;
+
+                    var sb = new StringBuilder(256);
+
+                    if (needHeader)
+                    {
+                        sb.AppendLine(string.Join(",",
+                            "timestamp",
+                            "ut_ch1",
+                            "ut_ch2",
+                            "ut_tj",
+                            "bath1_pv",
+                            "bath2_pv",
+                            "err1",
+                            "err2",
+                            "bath1_offset_cur",
+                            "bath2_offset_cur",
+                            "bath1_offset_target",
+                            "bath2_offset_target",
+                            "bath1_offset_applied",
+                            "bath2_offset_applied",
+                            "bath1_set_temp",
+                            "bath2_set_temp"
+                        ));
+                        _csvHeaderWritten = true;
+                    }
+
+                    sb.AppendLine(string.Join(",",
+                        r.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
+                        CsvNum(r.UtCh1, "0.000"),
+                        CsvNum(r.UtCh2, "0.000"),
+                        CsvNum(r.UtTj, "0.000"),
+                        CsvNum(r.Bath1Pv, "0.000"),
+                        CsvNum(r.Bath2Pv, "0.000"),
+                        CsvNum(r.Err1, "0.000"),
+                        CsvNum(r.Err2, "0.000"),
+                        CsvNum(r.Bath1OffsetCur, "0.0"),
+                        CsvNum(r.Bath2OffsetCur, "0.0"),
+                        CsvNum(r.Bath1OffsetTarget, "0.000"),
+                        CsvNum(r.Bath2OffsetTarget, "0.000"),
+                        CsvNum(r.Bath1OffsetApplied, "0.0"),
+                        CsvNum(r.Bath2OffsetApplied, "0.0"),
+                        CsvNum(r.Bath1SetTemp, "0.000"),
+                        CsvNum(r.Bath2SetTemp, "0.000")
+                    ));
+
+                    File.AppendAllText(_csvPath, sb.ToString(), Encoding.UTF8);
+                }
+            }
+            catch
+            {
+                // 로깅 실패는 프로그램 흐름을 막지 않음(최소 변경)
+            }
+        }
+
+        private static string CsvNum(double v, string fmt)
+        {
+            if (double.IsNaN(v) || double.IsInfinity(v)) return "";
+            return v.ToString(fmt);
         }
 
         private struct MultiBoardSnapshot

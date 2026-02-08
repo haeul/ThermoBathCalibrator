@@ -576,7 +576,7 @@ namespace ThermoBathCalibrator
             btnTestMb.Name = "btnTestMb";
             btnTestMb.Size = new Size(190, 22);
             btnTestMb.TabIndex = 6;
-            btnTestMb.Text = "통신 테스트(FC03 0~12)";
+            btnTestMb.Text = "통신 테스트(FC03 0~13)";
 
             // 하단 버튼/로그 (기존 그대로 배치 유지)
             btnReload.Location = new Point(646, 550);
