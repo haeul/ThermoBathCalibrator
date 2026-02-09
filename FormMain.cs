@@ -43,6 +43,10 @@ namespace ThermoBathCalibrator
         private bool _csvHeaderWritten;
         private DateTime _csvDay = DateTime.MinValue;
 
+        private readonly object _traceSync = new object();
+        private string _tracePath = "";
+        private DateTime _traceDay = DateTime.MinValue;
+
         private long _lastReconnectTick;
         private const int ReconnectCooldownMs = 800;
 
@@ -79,6 +83,16 @@ namespace ThermoBathCalibrator
         private const double FixedGraphMinY = 24.5;
         private const double FixedGraphMaxY = 25.5;
 
+        private const ushort RegReadStart = 0;
+        private const ushort RegReadCount = 14;
+        private const ushort RegCh1Command = 20;
+        private const ushort RegCh2Command = 24;
+        private const ushort RegCh1Response = 1;
+        private const ushort RegCh2Response = 8;
+
+        private const int AckTimeoutMs = 1500;
+        private const int AckPollIntervalMs = 100;
+        private const int AckInitialDelayMs = 120;
         public FormMain()
         {
             InitializeComponent();
@@ -152,6 +166,7 @@ namespace ThermoBathCalibrator
         private void BuildMultiBoardClient()
         {
             _mb = new MultiBoardModbusClient(_host, _port, _unitId);
+            _mb.Trace = TraceModbus;
         }
 
         private void ResetConnectionState()
@@ -514,7 +529,7 @@ namespace ThermoBathCalibrator
                 return false;
             }
 
-            if (!_mb.TryReadHoldingRegisters(start: 0, count: 14, out ushort[] regs, out string err))
+            if (!_mb.TryReadHoldingRegisters(start: RegReadStart, count: RegReadCount, out ushort[] regs, out string err))
             {
                 _boardConnected = false;
                 _boardFailCount++;
@@ -677,11 +692,8 @@ namespace ThermoBathCalibrator
 
                 ushort svWord = unchecked((ushort)((short)Math.Round(_bath1Setpoint * 10.0, MidpointRounding.AwayFromZero)));
 
-                if (!_mb.TryWriteMultipleRegisters(start: 20, values: new ushort[] { cmd, svWord, offsetWord }, out string err1))
-                    return false;
+                return TryWriteAndWaitAck(channel: 1, cmd: cmd, svWord: svWord, offsetWord: offsetWord, out _);
 
-                //_mb.TryWriteMultipleRegisters(start: 20, values: new ushort[] { 0 }, out _);
-                return true;
             }
 
             if (channel == 2)
@@ -691,16 +703,74 @@ namespace ThermoBathCalibrator
 
                 ushort svWord = unchecked((ushort)((short)Math.Round(_bath2Setpoint * 10.0, MidpointRounding.AwayFromZero)));
 
-                if (!_mb.TryWriteMultipleRegisters(start: 24, values: new ushort[] { cmd, svWord, offsetWord }, out string err1))
-                    return false;
-
-                //_mb.TryWriteMultipleRegisters(start: 24, values: new ushort[] { 0 }, out _);
-                return true;
+                return TryWriteAndWaitAck(channel: 2, cmd: cmd, svWord: svWord, offsetWord: offsetWord, out _);
             }
 
             return false;
         }
 
+        private bool TryWriteAndWaitAck(int channel, ushort cmd, ushort svWord, ushort offsetWord, out string error)
+        {
+            error = string.Empty;
+
+            ushort start = channel == 1 ? RegCh1Command : RegCh2Command;
+            ushort[] payload = new ushort[] { cmd, svWord, offsetWord };
+
+            if (!_mb.TryWriteMultipleRegisters(start, payload, out string errWrite))
+            {
+                error = $"WRITE FAIL: {errWrite}";
+                TraceModbus($"WRITE FAIL ch={channel} start={start} err={errWrite}");
+                return false;
+            }
+
+            if (cmd == 0)
+                return true;
+
+            int ackMask = cmd & 0x0003;
+            if (ackMask == 0)
+                return true;
+
+            Thread.Sleep(AckInitialDelayMs);
+
+            DateTime startTime = DateTime.UtcNow;
+            while ((DateTime.UtcNow - startTime).TotalMilliseconds < AckTimeoutMs)
+            {
+                if (TryReadResponseRegister(channel, out ushort resp, out string errResp))
+                {
+                    if ((resp & ackMask) == ackMask)
+                    {
+                        TraceModbus($"ACK OK ch={channel} resp=0x{resp:X4} mask=0x{ackMask:X4}");
+                        return true;
+                    }
+                }
+                else
+                {
+                    TraceModbus($"ACK READ FAIL ch={channel} err={errResp}");
+                }
+
+                Thread.Sleep(AckPollIntervalMs);
+            }
+
+            error = $"ACK TIMEOUT ch={channel} mask=0x{ackMask:X4}";
+            TraceModbus(error);
+            return false;
+        }
+
+        private bool TryReadResponseRegister(int channel, out ushort response, out string error)
+        {
+            response = 0;
+            error = string.Empty;
+
+            ushort start = channel == 1 ? RegCh1Response : RegCh2Response;
+            if (!_mb.TryReadHoldingRegisters(start, 1, out ushort[] regs, out string err))
+            {
+                error = err;
+                return false;
+            }
+
+            response = regs.Length > 0 ? regs[0] : (ushort)0;
+            return true;
+        }
         private static double AverageOrNaN(double a, double b)
         {
             bool aOk = !double.IsNaN(a) && !double.IsInfinity(a);
@@ -1091,6 +1161,37 @@ namespace ThermoBathCalibrator
 
             if (File.Exists(_csvPath) && new FileInfo(_csvPath).Length > 0)
                 _csvHeaderWritten = true;
+        }
+
+        private void PrepareTracePath(DateTime now)
+        {
+            DateTime day = now.Date;
+            if (_traceDay == day && !string.IsNullOrWhiteSpace(_tracePath)) return;
+
+            _traceDay = day;
+
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            string logDir = Path.Combine(baseDir, "Logs");
+            Directory.CreateDirectory(logDir);
+
+            string fileName = $"modbus_trace_{day:yyyyMMdd}.log";
+            _tracePath = Path.Combine(logDir, fileName);
+        }
+
+        private void TraceModbus(string message)
+        {
+            try
+            {
+                lock (_traceSync)
+                {
+                    PrepareTracePath(DateTime.Now);
+                    if (string.IsNullOrWhiteSpace(_tracePath)) return;
+                    File.AppendAllText(_tracePath, $"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}", Encoding.UTF8);
+                }
+            }
+            catch
+            {
+            }
         }
 
         private void AppendCsvRow(SampleRow r)

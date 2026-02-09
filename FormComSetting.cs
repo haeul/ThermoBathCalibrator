@@ -14,6 +14,14 @@ namespace ThermoBathCalibrator
 
         public CommSettings CurrentSettings => _settings;
 
+        private const ushort RegCh1Command = 20;
+        private const ushort RegCh2Command = 24;
+        private const ushort RegCh1Response = 1;
+        private const ushort RegCh2Response = 8;
+
+        private const int AckTimeoutMs = 1500;
+        private const int AckPollIntervalMs = 100;
+        private const int AckInitialDelayMs = 120;
         public FormComSetting()
         {
             InitializeComponent();
@@ -45,7 +53,7 @@ namespace ThermoBathCalibrator
             btnCh2OffSet.Click -= BtnCh2OffSet_Click;
             btnCh2OffSet.Click += BtnCh2OffSet_Click;
 
-            // ✅ READBACK 전용 버튼
+            // READBACK 전용 버튼
             btnReadbackNow.Click -= BtnReadbackNow_Click;
             btnReadbackNow.Click += BtnReadbackNow_Click;
 
@@ -84,13 +92,13 @@ namespace ThermoBathCalibrator
             WriteCommandOnly(channel: 2, doSv: false, doOffset: true);
         }
 
-        // ✅ READBACK 전용
+        //  READBACK 전용
         private void BtnReadbackNow_Click(object? sender, EventArgs e)
         {
             ReadSnapshotAndLog(delayMs: 0);
         }
 
-        // ✅ READBACK 전용(지연)
+        //  READBACK 전용(지연)
         private void BtnReadbackDelay_Click(object? sender, EventArgs e)
         {
             ReadSnapshotAndLog(delayMs: 800);
@@ -110,6 +118,7 @@ namespace ThermoBathCalibrator
 
                 using (var c = new MultiBoardModbusClient(mb.Host, mb.Port, (byte)mb.UnitId))
                 {
+                    c.Trace = Log;
                     if (!c.TryConnect(out string errConn))
                     {
                         Log($"MULTI CONNECT FAIL: {errConn}");
@@ -128,7 +137,7 @@ namespace ThermoBathCalibrator
                     ushort svWord = unchecked((ushort)svRaw10);
                     ushort offWord = unchecked((ushort)offRaw10);
 
-                    ushort start = (channel == 1) ? (ushort)20 : (ushort)24;
+                    ushort start = (channel == 1) ? RegCh1Command : RegCh2Command;
                     ushort[] payload = new ushort[] { cmd, svWord, offWord }; // 20,21,22 or 24,25,26
 
                     if (!c.TryWriteMultipleRegisters(start, payload, out string errW))
@@ -137,9 +146,18 @@ namespace ThermoBathCalibrator
                         return;
                     }
 
-                    Log($"WRITE OK (NO READBACK): CH{channel} cmd=0x{cmd:X4} sv={nudTestSv.Value.ToString("0.0", CultureInfo.InvariantCulture)} off={nudTestOffset.Value.ToString("0.0", CultureInfo.InvariantCulture)}");
+                    Log($"WRITE OK: CH{channel} cmd=0x{cmd:X4} sv={nudTestSv.Value.ToString("0.0", CultureInfo.InvariantCulture)} off={nudTestOffset.Value.ToString("0.0", CultureInfo.InvariantCulture)}");
 
-                    // ✅ 내가 쓴 영역도 즉시 읽어서 확인(20~22 or 24~26)
+                    if (!TryWaitAck(c, channel, cmd, out string errAck))
+                    {
+                        Log($"ACK TIMEOUT: CH{channel} err={errAck}");
+                        return;
+                    }
+
+                    Log($"ACK OK: CH{channel}");
+
+                    // 내가 쓴 영역도 즉시 읽어서 확인(20~22 or 24~26)
+                    Thread.Sleep(50);
                     if (!c.TryReadHoldingRegisters(start, 3, out ushort[] wrRegs, out string errWrRead))
                     {
                         Log($"WRITE-AREA READ FAIL: start={start} err={errWrRead}");
@@ -175,6 +193,7 @@ namespace ThermoBathCalibrator
 
                 using (var c = new MultiBoardModbusClient(mb.Host, mb.Port, (byte)mb.UnitId))
                 {
+                    c.Trace = Log;
                     if (!c.TryConnect(out string errConn))
                     {
                         Log($"MULTI CONNECT FAIL: {errConn}");
@@ -231,6 +250,43 @@ namespace ThermoBathCalibrator
         private static short ToSigned10(ushort w) => unchecked((short)w);
 
         private static bool GetBit(ushort w, int bit) => (w & (1 << bit)) != 0;
+
+        private bool TryWaitAck(MultiBoardModbusClient client, int channel, ushort cmd, out string error)
+        {
+            error = string.Empty;
+
+            int ackMask = cmd & 0x0003;
+            if (ackMask == 0)
+                return true;
+
+            Thread.Sleep(AckInitialDelayMs);
+
+            DateTime startTime = DateTime.UtcNow;
+            while ((DateTime.UtcNow - startTime).TotalMilliseconds < AckTimeoutMs)
+            {
+                ushort respStart = channel == 1 ? RegCh1Response : RegCh2Response;
+                if (client.TryReadHoldingRegisters(respStart, 1, out ushort[] regs, out string err))
+                {
+                    ushort resp = regs.Length > 0 ? regs[0] : (ushort)0;
+                    if ((resp & ackMask) == ackMask)
+                    {
+                        return true;
+                    }
+                }
+                else
+                {
+                    error = err;
+                }
+
+                Thread.Sleep(AckPollIntervalMs);
+            }
+
+            if (string.IsNullOrWhiteSpace(error))
+                error = "ACK polling timeout.";
+
+            return false;
+        }
+
 
         private void BtnSave_Click(object? sender, EventArgs e)
         {
