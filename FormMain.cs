@@ -20,7 +20,6 @@ namespace ThermoBathCalibrator
         private const double OffsetClampMin = -1.0;
         private const double OffsetClampMax = 1.0;
 
-        private readonly System.Windows.Forms.Timer _loopTimer;
         private bool _running;
 
         private const int MaxPoints = 300;
@@ -30,16 +29,9 @@ namespace ThermoBathCalibrator
         private double _bath2OffsetCur;
 
         private bool _boardConnected;
-        private bool _ch1DataOk;
-        private bool _ch2DataOk;
-
         private int _boardFailCount;
-        private int _ch1FailCount;
-        private int _ch2FailCount;
 
         private MultiBoardModbusClient _mb = null!;
-
-        private int _inTick;
 
         private string _host = "192.168.1.11";
         private int _port = 13000;
@@ -55,18 +47,37 @@ namespace ThermoBathCalibrator
         private const int ReconnectCooldownMs = 800;
 
         // 제어 안정화 상태
-
-        // 적분(I) 항
         private double _iTerm1 = 0.0;
         private double _iTerm2 = 0.0;
 
-        // 미분(D) 항용 이전 error
         private double _prevErr1 = double.NaN;
         private double _prevErr2 = double.NaN;
 
-        // 채널별 마지막 write 시각(hold/지연 반응 학습용)
         private DateTime _lastWriteCh1 = DateTime.MinValue;
         private DateTime _lastWriteCh2 = DateTime.MinValue;
+
+        // 워커 스레드(통신/로깅)
+        private Thread? _workerThread;
+        private volatile bool _workerRunning;
+
+        // 직전 정상값(필드 단위) 보정용 스냅샷
+        private MultiBoardSnapshot _lastGoodSnap;
+        private bool _hasLastGoodSnap;
+
+        // stale(레지스터 갱신 안 됨) 판정용
+        private ushort _lastRespCh1;
+        private ushort _lastRespCh2;
+        private bool _hasLastResp;
+
+        // Grid 성능
+        private const int MaxGridRows = 2000;
+        private int _scrollEveryN = 5;
+        private int _rowAddCount = 0;
+
+        // 그래프 스케일 고정 (요청: 24.5~25.5)
+        private const bool UseFixedGraphScale = true;
+        private const double FixedGraphMinY = 24.5;
+        private const double FixedGraphMaxY = 25.5;
 
         public FormMain()
         {
@@ -90,12 +101,7 @@ namespace ThermoBathCalibrator
             EnableDoubleBuffer(pnlCh1Graph);
             EnableDoubleBuffer(pnlCh2Graph);
 
-            _loopTimer = new System.Windows.Forms.Timer();
-            _loopTimer.Interval = 1000;
-            _loopTimer.Tick += LoopTimer_Tick;
-
             LoadMultiBoardSettingsFromDiskIfAny();
-
             BuildMultiBoardClient();
 
             ResetConnectionState();
@@ -125,7 +131,6 @@ namespace ThermoBathCalibrator
             }
             catch
             {
-                // 설정 로드 실패 시 기본값 유지
             }
         }
 
@@ -152,12 +157,7 @@ namespace ThermoBathCalibrator
         private void ResetConnectionState()
         {
             _boardConnected = false;
-            _ch1DataOk = false;
-            _ch2DataOk = false;
-
             _boardFailCount = 0;
-            _ch1FailCount = 0;
-            _ch2FailCount = 0;
 
             _iTerm1 = 0.0;
             _iTerm2 = 0.0;
@@ -165,6 +165,13 @@ namespace ThermoBathCalibrator
             _prevErr2 = double.NaN;
             _lastWriteCh1 = DateTime.MinValue;
             _lastWriteCh2 = DateTime.MinValue;
+
+            _hasLastGoodSnap = false;
+            _lastGoodSnap = default;
+
+            _hasLastResp = false;
+            _lastRespCh1 = 0;
+            _lastRespCh2 = 0;
         }
 
         private void BtnComSetting_Click(object sender, EventArgs e)
@@ -186,13 +193,22 @@ namespace ThermoBathCalibrator
                     int unit = s.MultiBoard.UnitId;
 
                     ApplyMultiBoardEndpoint(host, port, (byte)Math.Max(1, Math.Min(247, unit)));
-                    MessageBox.Show($"멀티보드 설정 적용: {_host}:{_port} (UnitId={_unitId})",
-                        "COM Settings", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                    MessageBox.Show(
+                        $"멀티보드 설정 적용: {_host}:{_port} (UnitId={_unitId})",
+                        "COM Settings",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
                 }
                 else
                 {
-                    MessageBox.Show("멀티보드 설정을 찾을 수 없습니다. (comm_settings.json 확인)",
-                        "COM Settings", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show(
+                        "멀티보드 설정을 찾을 수 없습니다. (comm_settings.json 확인)",
+                        "COM Settings",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
                 }
             }
             catch (Exception ex)
@@ -207,14 +223,12 @@ namespace ThermoBathCalibrator
 
             PrepareCsvPath(DateTime.Now);
 
-            if (!_mb.IsConnected)
-            {
-                _boardConnected = TryConnectWithCooldown();
-                if (!_boardConnected) _boardFailCount++;
-            }
-
             _running = true;
-            _loopTimer.Start();
+            _workerRunning = true;
+
+            _workerThread = new Thread(WorkerLoop);
+            _workerThread.IsBackground = true;
+            _workerThread.Start();
 
             UpdateStatusLabels();
         }
@@ -224,7 +238,9 @@ namespace ThermoBathCalibrator
             if (!_running) return;
 
             _running = false;
-            _loopTimer.Stop();
+            _workerRunning = false;
+
+            try { _workerThread?.Join(500); } catch { }
 
             _mb.Disconnect();
             _boardConnected = false;
@@ -245,6 +261,7 @@ namespace ThermoBathCalibrator
                 _bath1OffsetCur = applied;
                 _lastWriteCh1 = DateTime.Now;
             }
+
             if (ok2)
             {
                 _bath2OffsetCur = applied;
@@ -258,76 +275,113 @@ namespace ThermoBathCalibrator
             pnlCh2Graph.Invalidate();
         }
 
-        private void LoopTimer_Tick(object sender, EventArgs e)
+        private void WorkerLoop()
         {
-            if (!_running) return;
+            while (_workerRunning)
+            {
+                DateTime started = DateTime.Now;
 
-            if (Interlocked.Exchange(ref _inTick, 1) == 1) return;
+                try
+                {
+                    SampleRow row = LoopOnceCore();
 
-            try { LoopOnce(); }
-            finally { Interlocked.Exchange(ref _inTick, 0); }
+                    // ===== 스킵 기준 적용 =====
+                    // 기준: Bath1Pv, Bath2Pv, UtCh1, UtCh2 모두 값이 없거나( NaN ) / 0이면 기록하지 않음
+                    if (ShouldSkipRow(row))
+                    {
+                        // 상태 라벨 정도는 갱신(통신 끊김/복구 표시용)
+                        BeginInvoke(new Action(() =>
+                        {
+                            UpdateStatusLabels();
+                        }));
+                    }
+                    else
+                    {
+                        BeginInvoke(new Action(() =>
+                        {
+                            AppendRowToGrid(row);
+                            AppendRowToHistory(row);
+
+                            double offsetAvg = AverageOrNaN(row.Bath1OffsetCur, row.Bath2OffsetCur);
+                            UpdateTopNumbers(row.UtCh1, row.UtCh2, offsetAvg);
+
+                            UpdateStatusLabels();
+                            pnlCh1Graph.Invalidate();
+                            pnlCh2Graph.Invalidate();
+                        }));
+
+                        AppendCsvRow(row);
+                    }
+                }
+                catch
+                {
+                }
+
+                int sleepMs = 1000 - (int)(DateTime.Now - started).TotalMilliseconds;
+                if (sleepMs < 1) sleepMs = 1;
+                Thread.Sleep(sleepMs);
+            }
         }
 
-        private void LoopOnce()
+        private static bool IsMissingOrZero(double v)
+        {
+            if (double.IsNaN(v) || double.IsInfinity(v)) return true;
+            return Math.Abs(v) < 1e-9;
+        }
+
+        private static bool ShouldSkipRow(SampleRow r)
+        {
+            // 핵심 4개(요청 기준): bath1_pv, bath2_pv, ut_ch1, ut_ch2
+            bool allMissing =
+                IsMissingOrZero(r.Bath1Pv) &&
+                IsMissingOrZero(r.Bath2Pv) &&
+                IsMissingOrZero(r.UtCh1) &&
+                IsMissingOrZero(r.UtCh2);
+
+            return allMissing;
+        }
+
+        private SampleRow LoopOnceCore()
         {
             DateTime now = DateTime.Now;
 
             PrepareCsvPath(now);
 
-            bool readOk = TryReadMultiBoard(out MultiBoardSnapshot snap);
+            bool readOk = TryReadMultiBoard(out MultiBoardSnapshot snap, out bool stale);
 
-            // ut_ch1 / ut_ch2: UT-ONE 외부 온도계 측정값(채널별)
             double utCh1 = readOk ? snap.Ch1ExternalThermo : double.NaN;
             double utCh2 = readOk ? snap.Ch2ExternalThermo : double.NaN;
-
-            // ut_tj: UT-ONE 내부 온도(TJ)
             double utTj = readOk ? snap.Tj : double.NaN;
 
-            // bath1_pv / bath2_pv: 항온조 현재 온도(PV)
             double bath1Pv = readOk ? snap.Ch1Pv : double.NaN;
             double bath2Pv = readOk ? snap.Ch2Pv : double.NaN;
 
             if (readOk)
             {
-                // bath1_offset_cur / bath2_offset_cur: 장비에 이미 적용되어 있는 offset(레지스터 값)
                 _bath1OffsetCur = snap.Ch1OffsetCur;
                 _bath2OffsetCur = snap.Ch2OffsetCur;
             }
 
-            // err1 = ut_ch1 - bath1_pv, err2 = ut_ch2 - bath2_pv
             double err1 = (!double.IsNaN(utCh1) && !double.IsNaN(bath1Pv)) ? (utCh1 - bath1Pv) : double.NaN;
             double err2 = (!double.IsNaN(utCh2) && !double.IsNaN(bath2Pv)) ? (utCh2 - bath2Pv) : double.NaN;
 
-            // derr1 = err1 - prev_err1, derr2 = err2 - prev_err2
             double derr1 = (!double.IsNaN(err1) && !double.IsNaN(_prevErr1)) ? (err1 - _prevErr1) : double.NaN;
             double derr2 = (!double.IsNaN(err2) && !double.IsNaN(_prevErr2)) ? (err2 - _prevErr2) : double.NaN;
 
-            // err1_ma5 / err2_ma5: 최근 5초 이동평균(유효값만)
             double err1Ma5 = MovingAverageWithCurrent(_history.Select(h => h.Err1), current: err1, window: 5);
             double err2Ma5 = MovingAverageWithCurrent(_history.Select(h => h.Err2), current: err2, window: 5);
 
-            // err1_std10 / err2_std10: 최근 10초 표준편차(유효값만)
             double err1Std10 = StdDevWithCurrent(_history.Select(h => h.Err1), current: err1, window: 10);
             double err2Std10 = StdDevWithCurrent(_history.Select(h => h.Err2), current: err2, window: 10);
 
-            // last_write_age_ch1_sec / last_write_age_ch2_sec
-            // 채널별 마지막 write 이후 경과 시간(초). hold/지연 반응을 채널별로 학습시키려면 분리하는 편이 좋다.
             double lastWriteAgeCh1Sec = (_lastWriteCh1 == DateTime.MinValue) ? double.NaN : (now - _lastWriteCh1).TotalSeconds;
             double lastWriteAgeCh2Sec = (_lastWriteCh2 == DateTime.MinValue) ? double.NaN : (now - _lastWriteCh2).TotalSeconds;
 
-            bool readOkFlag = readOk;
-            bool boardConnectedFlag = _boardConnected;
-
-            // bath1_offset_target / bath2_offset_target: 제어 로직이 계산한 목표 offset(연속값)
             double target1 = (!double.IsNaN(err1)) ? CalculateOffsetTarget(channel: 1, error: err1) : double.NaN;
             double target2 = (!double.IsNaN(err2)) ? CalculateOffsetTarget(channel: 2, error: err2) : double.NaN;
 
-            // step(0.1) 반영된 "원래 쓰고 싶은 값"
             double desiredApplied1 = (!double.IsNaN(target1)) ? QuantizeOffset(target1, OffsetStep) : double.NaN;
             double desiredApplied2 = (!double.IsNaN(target2)) ? QuantizeOffset(target2, OffsetStep) : double.NaN;
-
-            bool w1 = false;
-            bool w2 = false;
 
             double appliedToSend1 = desiredApplied1;
             double appliedToSend2 = desiredApplied2;
@@ -336,11 +390,15 @@ namespace ThermoBathCalibrator
             {
                 if (TryApplyOffsetWithPolicy(channel: 1, now: now, err: err1, desiredAppliedOffset: desiredApplied1, ref appliedToSend1))
                 {
-                    w1 = TryWriteChannelOffset(channel: 1, appliedOffset: appliedToSend1);
+                    bool w1 = TryWriteChannelOffset(channel: 1, appliedOffset: appliedToSend1);
                     if (w1)
                     {
                         _bath1OffsetCur = appliedToSend1;
                         _lastWriteCh1 = now;
+                    }
+                    else
+                    {
+                        appliedToSend1 = _bath1OffsetCur;
                     }
                 }
                 else
@@ -357,11 +415,15 @@ namespace ThermoBathCalibrator
             {
                 if (TryApplyOffsetWithPolicy(channel: 2, now: now, err: err2, desiredAppliedOffset: desiredApplied2, ref appliedToSend2))
                 {
-                    w2 = TryWriteChannelOffset(channel: 2, appliedOffset: appliedToSend2);
+                    bool w2 = TryWriteChannelOffset(channel: 2, appliedOffset: appliedToSend2);
                     if (w2)
                     {
                         _bath2OffsetCur = appliedToSend2;
                         _lastWriteCh2 = now;
+                    }
+                    else
+                    {
+                        appliedToSend2 = _bath2OffsetCur;
                     }
                 }
                 else
@@ -374,14 +436,14 @@ namespace ThermoBathCalibrator
                 appliedToSend2 = _bath2OffsetCur;
             }
 
-            // bath1_set_temp = bath1_setpoint + bath1_offset_cur, bath2_set_temp = bath2_setpoint + bath2_offset_cur
             double bath1SetTemp = (!double.IsNaN(_bath1OffsetCur)) ? _bath1Setpoint + _bath1OffsetCur : double.NaN;
             double bath2SetTemp = (!double.IsNaN(_bath2OffsetCur)) ? _bath2Setpoint + _bath2OffsetCur : double.NaN;
 
-            double offsetAvg = AverageOrNaN(_bath1OffsetCur, _bath2OffsetCur);
-            UpdateTopNumbers(utCh1, utCh2, offsetAvg);
+            // stale 프레임이면(갱신 안 됨) 핵심값이 다 비정상일 때 스킵될 가능성이 큼.
+            // 필요하면 SampleRow에 Stale 필드를 추가해도 됨(현재는 로깅에만 영향).
+            _ = stale;
 
-            var row = new SampleRow
+            return new SampleRow
             {
                 Timestamp = now,
 
@@ -410,8 +472,8 @@ namespace ThermoBathCalibrator
                 LastWriteAgeCh1Sec = lastWriteAgeCh1Sec,
                 LastWriteAgeCh2Sec = lastWriteAgeCh2Sec,
 
-                ReadOk = readOkFlag,
-                BoardConnected = boardConnectedFlag,
+                ReadOk = readOk,
+                BoardConnected = _boardConnected,
 
                 Bath1OffsetTarget = target1,
                 Bath2OffsetTarget = target2,
@@ -422,16 +484,6 @@ namespace ThermoBathCalibrator
                 Bath1SetTemp = bath1SetTemp,
                 Bath2SetTemp = bath2SetTemp
             };
-
-            AppendRowToGrid(row);
-            AppendRowToHistory(row);
-
-            AppendCsvRow(row);
-
-            UpdateStatusLabels();
-
-            pnlCh1Graph.Invalidate();
-            pnlCh2Graph.Invalidate();
         }
 
         private bool TryConnectWithCooldown()
@@ -445,9 +497,10 @@ namespace ThermoBathCalibrator
             return _mb.TryConnect(out _);
         }
 
-        private bool TryReadMultiBoard(out MultiBoardSnapshot snap)
+        private bool TryReadMultiBoard(out MultiBoardSnapshot snap, out bool stale)
         {
             snap = default;
+            stale = false;
 
             if (!_mb.IsConnected)
             {
@@ -458,11 +511,6 @@ namespace ThermoBathCalibrator
             if (!_mb.IsConnected)
             {
                 _boardConnected = false;
-                _ch1DataOk = false;
-                _ch2DataOk = false;
-
-                _ch1FailCount++;
-                _ch2FailCount++;
                 return false;
             }
 
@@ -470,23 +518,87 @@ namespace ThermoBathCalibrator
             {
                 _boardConnected = false;
                 _boardFailCount++;
-
-                _ch1DataOk = false;
-                _ch2DataOk = false;
-                _ch1FailCount++;
-                _ch2FailCount++;
-
                 return false;
             }
 
             _boardConnected = true;
 
-            snap = ParseSnapshot(regs);
+            MultiBoardSnapshot parsed = ParseSnapshot(regs);
 
-            _ch1DataOk = true;
-            _ch2DataOk = true;
+            // ===== 레지스터 갱신(stale) 판정 =====
+            // Ch1Response=r[1], Ch2Response=r[8]을 "갱신 카운터/플래그"로 가정.
+            // 동일하면 갱신이 안 된 프레임일 수 있음.
+            if (_hasLastResp)
+            {
+                if (parsed.Ch1Response == _lastRespCh1 && parsed.Ch2Response == _lastRespCh2)
+                    stale = true;
+            }
+            _lastRespCh1 = parsed.Ch1Response;
+            _lastRespCh2 = parsed.Ch2Response;
+            _hasLastResp = true;
 
+            // ===== 필드 단위 lastGood 보정 =====
+            parsed = MergeWithLastGood(parsed);
+
+            snap = parsed;
             return true;
+        }
+
+        private MultiBoardSnapshot MergeWithLastGood(MultiBoardSnapshot cur)
+        {
+            // "유효"의 기준은 ParseSnapshot에서 이미 NaN 처리된 값이냐 아니냐로 단순화
+            bool curHasAny =
+                !double.IsNaN(cur.Ch1Pv) ||
+                !double.IsNaN(cur.Ch2Pv) ||
+                !double.IsNaN(cur.Ch1ExternalThermo) ||
+                !double.IsNaN(cur.Ch2ExternalThermo) ||
+                !double.IsNaN(cur.Tj);
+
+            if (!_hasLastGoodSnap)
+            {
+                if (curHasAny)
+                {
+                    _lastGoodSnap = cur;
+                    _hasLastGoodSnap = true;
+                }
+                return cur;
+            }
+
+            // cur 값이 NaN이면 lastGood으로 채우고,
+            // cur 값이 유효하면 lastGood을 갱신한다.
+            if (double.IsNaN(cur.Ch1Pv)) cur.Ch1Pv = _lastGoodSnap.Ch1Pv;
+            else _lastGoodSnap.Ch1Pv = cur.Ch1Pv;
+
+            if (double.IsNaN(cur.Ch2Pv)) cur.Ch2Pv = _lastGoodSnap.Ch2Pv;
+            else _lastGoodSnap.Ch2Pv = cur.Ch2Pv;
+
+            if (double.IsNaN(cur.Ch1ExternalThermo)) cur.Ch1ExternalThermo = _lastGoodSnap.Ch1ExternalThermo;
+            else _lastGoodSnap.Ch1ExternalThermo = cur.Ch1ExternalThermo;
+
+            if (double.IsNaN(cur.Ch2ExternalThermo)) cur.Ch2ExternalThermo = _lastGoodSnap.Ch2ExternalThermo;
+            else _lastGoodSnap.Ch2ExternalThermo = cur.Ch2ExternalThermo;
+
+            if (double.IsNaN(cur.Tj)) cur.Tj = _lastGoodSnap.Tj;
+            else _lastGoodSnap.Tj = cur.Tj;
+
+            // offset/SV/flag 같은 값들은 일단 최신 우선(원하면 이것도 동일 패턴으로 보정 가능)
+            _lastGoodSnap.Ch1Alive = cur.Ch1Alive;
+            _lastGoodSnap.Ch1Response = cur.Ch1Response;
+            _lastGoodSnap.Ch1Sv = cur.Ch1Sv;
+            _lastGoodSnap.Ch1OffsetCur = cur.Ch1OffsetCur;
+
+            _lastGoodSnap.Ch2Alive = cur.Ch2Alive;
+            _lastGoodSnap.Ch2Response = cur.Ch2Response;
+            _lastGoodSnap.Ch2Sv = cur.Ch2Sv;
+            _lastGoodSnap.Ch2OffsetCur = cur.Ch2OffsetCur;
+
+            return cur;
+        }
+
+        private static bool IsPlausibleTemp(double v, double min, double max)
+        {
+            if (double.IsNaN(v) || double.IsInfinity(v)) return false;
+            return v >= min && v <= max;
         }
 
         private static MultiBoardSnapshot ParseSnapshot(ushort[] r)
@@ -496,32 +608,48 @@ namespace ThermoBathCalibrator
             short ch1PvRaw = unchecked((short)r[2]);
             short ch1SvRaw = unchecked((short)r[3]);
             short ch1OffRaw = unchecked((short)r[4]);
+
             short ch2PvRaw = unchecked((short)r[9]);
             short ch2SvRaw = unchecked((short)r[10]);
             short ch2OffRaw = unchecked((short)r[11]);
 
             int ch1ExtRaw = r[5];
             int ch2ExtRaw = r[12];
-
             int tjRaw = r[13];
+
+            double ch1Pv = ch1PvRaw / 10.0;
+            double ch2Pv = ch2PvRaw / 10.0;
+
+            double ch1Ext = ch1ExtRaw / 1000.0;
+            double ch2Ext = ch2ExtRaw / 1000.0;
+            double tj = tjRaw / 1000.0;
+
+            // 현장 온도 범위에 맞게 조정 가능 (지금은 안전하게 5~80으로 둠)
+            if (!IsPlausibleTemp(ch1Pv, 5, 80)) ch1Pv = double.NaN;
+            if (!IsPlausibleTemp(ch2Pv, 5, 80)) ch2Pv = double.NaN;
+
+            if (!IsPlausibleTemp(ch1Ext, 5, 80)) ch1Ext = double.NaN;
+            if (!IsPlausibleTemp(ch2Ext, 5, 80)) ch2Ext = double.NaN;
+
+            if (!IsPlausibleTemp(tj, 5, 80)) tj = double.NaN;
 
             return new MultiBoardSnapshot
             {
                 Ch1Alive = r[0],
                 Ch1Response = r[1],
-                Ch1Pv = ch1PvRaw / 10.0,
+                Ch1Pv = ch1Pv,
                 Ch1Sv = ch1SvRaw / 10.0,
                 Ch1OffsetCur = ch1OffRaw / 10.0,
-                Ch1ExternalThermo = ch1ExtRaw / 1000.0,
+                Ch1ExternalThermo = ch1Ext,
 
                 Ch2Alive = r[7],
                 Ch2Response = r[8],
-                Ch2Pv = ch2PvRaw / 10.0,
+                Ch2Pv = ch2Pv,
                 Ch2Sv = ch2SvRaw / 10.0,
                 Ch2OffsetCur = ch2OffRaw / 10.0,
-                Ch2ExternalThermo = ch2ExtRaw / 1000.0,
+                Ch2ExternalThermo = ch2Ext,
 
-                Tj = tjRaw / 1000.0
+                Tj = tj
             };
         }
 
@@ -552,7 +680,7 @@ namespace ThermoBathCalibrator
                 if (!_mb.TryWriteMultipleRegisters(start: 20, values: new ushort[] { cmd, svWord, offsetWord }, out string err1))
                     return false;
 
-                _mb.TryWriteMultipleRegisters(start: 20, values: new ushort[] { 0 }, out _);
+                //_mb.TryWriteMultipleRegisters(start: 20, values: new ushort[] { 0 }, out _);
                 return true;
             }
 
@@ -566,7 +694,7 @@ namespace ThermoBathCalibrator
                 if (!_mb.TryWriteMultipleRegisters(start: 24, values: new ushort[] { cmd, svWord, offsetWord }, out string err1))
                     return false;
 
-                _mb.TryWriteMultipleRegisters(start: 24, values: new ushort[] { 0 }, out _);
+                //_mb.TryWriteMultipleRegisters(start: 24, values: new ushort[] { 0 }, out _);
                 return true;
             }
 
@@ -597,7 +725,6 @@ namespace ThermoBathCalibrator
             else kBase = 0.5;
 
             double k = kBase + 0.5;
-
             double p = error * k;
 
             const bool EnableIntegral = true;
@@ -655,6 +782,7 @@ namespace ThermoBathCalibrator
             const double MinChangeToWrite = 0.1;
 
             double absErr = Math.Abs(err);
+
             double holdSeconds;
             if (absErr >= 0.5) holdSeconds = 2.0;
             else if (absErr >= 0.2) holdSeconds = 3.0;
@@ -722,10 +850,17 @@ namespace ThermoBathCalibrator
                 ToCell(r.Bath2SetTemp, fmtTemp)
             );
 
-            if (dataGridView1.Rows.Count > 0)
+            if (dataGridView1.Rows.Count > MaxGridRows)
+            {
+                dataGridView1.Rows.RemoveAt(0);
+            }
+
+            _rowAddCount++;
+            if (_rowAddCount % _scrollEveryN == 0)
             {
                 int last = dataGridView1.Rows.Count - 1;
-                dataGridView1.FirstDisplayedScrollingRowIndex = last;
+                if (last >= 0)
+                    dataGridView1.FirstDisplayedScrollingRowIndex = last;
             }
         }
 
@@ -798,14 +933,40 @@ namespace ThermoBathCalibrator
             List<double> setTemp = channel == 1 ? _history.Select(h => h.Bath1SetTemp).ToList()
                                                 : _history.Select(h => h.Bath2SetTemp).ToList();
 
-            double center = 25.0;
-            double span = 0.5;
+            double minY, maxY;
 
-            double minY = center - span;
-            double maxY = center + span;
+            if (UseFixedGraphScale)
+            {
+                minY = FixedGraphMinY;
+                maxY = FixedGraphMaxY;
+            }
+            else
+            {
+                var all = new List<double>();
+                all.AddRange(pv.Where(v => !double.IsNaN(v) && !double.IsInfinity(v)));
+                all.AddRange(ut.Where(v => !double.IsNaN(v) && !double.IsInfinity(v)));
+                all.AddRange(setTemp.Where(v => !double.IsNaN(v) && !double.IsInfinity(v)));
+
+                if (all.Count >= 2)
+                {
+                    double minV = all.Min();
+                    double maxV = all.Max();
+
+                    double span = Math.Max(0.05, maxV - minV);
+                    double margin = span * 0.2;
+
+                    minY = minV - margin;
+                    maxY = maxV + margin;
+                }
+                else
+                {
+                    minY = 24.5;
+                    maxY = 25.5;
+                }
+            }
 
             using var gridPen = new Pen(Color.LightGray, 1);
-            int hLines = 5;
+            int hLines = 10;
             for (int i = 0; i <= hLines; i++)
             {
                 float y = plot.Top + i * (plot.Height / (float)hLines);
@@ -975,6 +1136,7 @@ namespace ThermoBathCalibrator
                             "bath1_set_temp",
                             "bath2_set_temp"
                         ));
+
                         _csvHeaderWritten = true;
                     }
 
@@ -1012,7 +1174,6 @@ namespace ThermoBathCalibrator
             }
             catch
             {
-                // 로깅 실패는 프로그램 흐름을 막지 않음
             }
         }
 
@@ -1025,6 +1186,7 @@ namespace ThermoBathCalibrator
         private static double MovingAverageWithCurrent(IEnumerable<double> pastValues, double current, int window)
         {
             var list = new List<double>(window);
+
             if (!double.IsNaN(current) && !double.IsInfinity(current))
                 list.Add(current);
 
@@ -1042,6 +1204,7 @@ namespace ThermoBathCalibrator
         private static double StdDevWithCurrent(IEnumerable<double> pastValues, double current, int window)
         {
             var list = new List<double>(window);
+
             if (!double.IsNaN(current) && !double.IsInfinity(current))
                 list.Add(current);
 
@@ -1056,11 +1219,13 @@ namespace ThermoBathCalibrator
 
             double mean = list.Average();
             double var = 0.0;
+
             for (int i = 0; i < list.Count; i++)
             {
                 double d = list[i] - mean;
                 var += d * d;
             }
+
             var /= (list.Count - 1);
             return Math.Sqrt(var);
         }
