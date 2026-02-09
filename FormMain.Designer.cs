@@ -25,7 +25,6 @@ namespace ThermoBathCalibrator
             DataGridViewCellStyle dataGridViewCellStyle2 = new DataGridViewCellStyle();
             pnlHeader = new Panel();
             tlpSetting = new TableLayoutPanel();
-            btnTest = new Button();
             btnComSetting = new Button();
             lblHeader = new Label();
             pnlBacrground = new Panel();
@@ -44,8 +43,6 @@ namespace ThermoBathCalibrator
             lblCh2 = new Label();
             dataGridView1 = new DataGridView();
             tlpCommStatus = new TableLayoutPanel();
-            lblBath1PortStatus = new Label();
-            lblBath2PortStatus = new Label();
             lblThermoPortStatus = new Label();
             colTimestamp = new DataGridViewTextBoxColumn();
             colUtCh1 = new DataGridViewTextBoxColumn();
@@ -80,11 +77,12 @@ namespace ThermoBathCalibrator
             // 
             tlpSetting.BackColor = Color.White;
             tlpSetting.CellBorderStyle = TableLayoutPanelCellBorderStyle.Single;
-            tlpSetting.ColumnCount = 2;
-            tlpSetting.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-            tlpSetting.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-            tlpSetting.Controls.Add(btnTest, 1, 0);
+
+            // Test 버튼 삭제 → 1컬럼으로 축소
+            tlpSetting.ColumnCount = 1;
+            tlpSetting.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             tlpSetting.Controls.Add(btnComSetting, 0, 0);
+
             tlpSetting.Location = new Point(1188, 3);
             tlpSetting.Name = "tlpSetting";
             tlpSetting.RowCount = 1;
@@ -92,26 +90,16 @@ namespace ThermoBathCalibrator
             tlpSetting.Size = new Size(262, 59);
             tlpSetting.TabIndex = 4;
             // 
-            // btnTest
-            // 
-            btnTest.BackColor = SystemColors.Control;
-            btnTest.Font = new Font("Segoe UI Semibold", 14.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            btnTest.ForeColor = SystemColors.ControlText;
-            btnTest.Location = new Point(134, 4);
-            btnTest.Name = "btnTest";
-            btnTest.Size = new Size(123, 51);
-            btnTest.TabIndex = 4;
-            btnTest.Text = "Test";
-            btnTest.UseVisualStyleBackColor = false;
-            // 
             // btnComSetting
             // 
             btnComSetting.BackColor = SystemColors.Control;
             btnComSetting.Font = new Font("Segoe UI Semibold", 14.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
             btnComSetting.ForeColor = SystemColors.ControlText;
+
+            // 1칸을 꽉 채우도록 사이즈만 조정(원하면 Dock=Fill로 바꿔도 됨)
             btnComSetting.Location = new Point(4, 4);
             btnComSetting.Name = "btnComSetting";
-            btnComSetting.Size = new Size(123, 51);
+            btnComSetting.Size = new Size(254, 51);
             btnComSetting.TabIndex = 3;
             btnComSetting.Text = "Port Setting";
             btnComSetting.UseVisualStyleBackColor = false;
@@ -326,13 +314,12 @@ namespace ThermoBathCalibrator
             // 
             tlpCommStatus.BackColor = SystemColors.Control;
             tlpCommStatus.CellBorderStyle = TableLayoutPanelCellBorderStyle.Single;
-            tlpCommStatus.ColumnCount = 3;
-            tlpCommStatus.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33333F));
-            tlpCommStatus.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33333F));
-            tlpCommStatus.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33333F));
-            tlpCommStatus.Controls.Add(lblBath1PortStatus, 0, 0);
-            tlpCommStatus.Controls.Add(lblBath2PortStatus, 1, 0);
-            tlpCommStatus.Controls.Add(lblThermoPortStatus, 2, 0);
+
+            // 3칸 → 1칸(BOARD 상태만)
+            tlpCommStatus.ColumnCount = 1;
+            tlpCommStatus.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            tlpCommStatus.Controls.Add(lblThermoPortStatus, 0, 0);
+
             tlpCommStatus.Location = new Point(10, 1252);
             tlpCommStatus.Name = "tlpCommStatus";
             tlpCommStatus.RowCount = 1;
@@ -340,43 +327,19 @@ namespace ThermoBathCalibrator
             tlpCommStatus.Size = new Size(1453, 36);
             tlpCommStatus.TabIndex = 8;
             // 
-            // lblBath1PortStatus
-            // 
-            lblBath1PortStatus.Dock = DockStyle.Fill;
-            lblBath1PortStatus.Font = new Font("Segoe UI Semibold", 12.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblBath1PortStatus.ForeColor = Color.OrangeRed;
-            lblBath1PortStatus.Location = new Point(1, 1);
-            lblBath1PortStatus.Margin = new Padding(0);
-            lblBath1PortStatus.Name = "lblBath1PortStatus";
-            lblBath1PortStatus.Size = new Size(483, 34);
-            lblBath1PortStatus.TabIndex = 0;
-            lblBath1PortStatus.Text = "BATH #1";
-            lblBath1PortStatus.TextAlign = ContentAlignment.MiddleCenter;
-            // 
-            // lblBath2PortStatus
-            // 
-            lblBath2PortStatus.Dock = DockStyle.Fill;
-            lblBath2PortStatus.Font = new Font("Segoe UI Semibold", 12.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblBath2PortStatus.ForeColor = Color.Gray;
-            lblBath2PortStatus.Location = new Point(485, 1);
-            lblBath2PortStatus.Margin = new Padding(0);
-            lblBath2PortStatus.Name = "lblBath2PortStatus";
-            lblBath2PortStatus.Size = new Size(483, 34);
-            lblBath2PortStatus.TabIndex = 1;
-            lblBath2PortStatus.Text = "BATH #2";
-            lblBath2PortStatus.TextAlign = ContentAlignment.MiddleCenter;
-            // 
             // lblThermoPortStatus
             // 
             lblThermoPortStatus.Dock = DockStyle.Fill;
             lblThermoPortStatus.Font = new Font("Segoe UI Semibold", 12.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
             lblThermoPortStatus.ForeColor = Color.Gray;
-            lblThermoPortStatus.Location = new Point(969, 1);
+            lblThermoPortStatus.Location = new Point(1, 1);
             lblThermoPortStatus.Margin = new Padding(0);
             lblThermoPortStatus.Name = "lblThermoPortStatus";
-            lblThermoPortStatus.Size = new Size(483, 34);
+            lblThermoPortStatus.Size = new Size(1451, 34);
             lblThermoPortStatus.TabIndex = 2;
-            lblThermoPortStatus.Text = "UT-ONE";
+
+            // 기본 텍스트도 BOARD로 변경(코드에서 덮어써도 OK)
+            lblThermoPortStatus.Text = "BOARD";
             lblThermoPortStatus.TextAlign = ContentAlignment.MiddleCenter;
             // 
             // colTimestamp
@@ -484,8 +447,11 @@ namespace ThermoBathCalibrator
         private TableLayoutPanel tlpSetting;
 
         private TableLayoutPanel tlpCommStatus;
-        private Label lblBath1PortStatus;
-        private Label lblBath2PortStatus;
+
+        // BATH1/BATH2 라벨 제거
+        // private Label lblBath1PortStatus;
+        // private Label lblBath2PortStatus;
+
         private Label lblThermoPortStatus;
 
         private Panel pnlCh2Graph;
@@ -501,7 +467,10 @@ namespace ThermoBathCalibrator
         private Button btnStop;
         private Label lblCh1;
         private Label lblCh2;
-        private Button btnTest;
+
+        // Test 버튼 제거
+        // private Button btnTest;
+
         private DataGridViewTextBoxColumn colTimestamp;
         private DataGridViewTextBoxColumn colUtCh1;
         private DataGridViewTextBoxColumn colUtCh2;
