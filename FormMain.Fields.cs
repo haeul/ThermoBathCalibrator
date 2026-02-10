@@ -26,6 +26,7 @@ namespace ThermoBathCalibrator
 
         private double _bath1OffsetCur;
         private double _bath2OffsetCur;
+        private readonly object _offsetStateSync = new object();
 
         // 보드 연결 상태
         private bool _boardConnected;
@@ -95,6 +96,8 @@ namespace ThermoBathCalibrator
         private const ushort RegCh2Command = 24;
         private const ushort RegCh1Response = 1;
         private const ushort RegCh2Response = 8;
+        private const ushort RegCh1OffsetCur = 4;
+        private const ushort RegCh2OffsetCur = 11;
 
         private const int AckTimeoutMs = 1500;
         private const int AckPollIntervalMs = 100;

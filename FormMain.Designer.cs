@@ -31,16 +31,23 @@ namespace ThermoBathCalibrator
             pnlCh2Graph = new Panel();
             pnlCh1Graph = new Panel();
             tlpbutton = new TableLayoutPanel();
-            lblOffsetValue = new Label();
-            lblOffset = new Label();
             lblCh2Temperature = new Label();
             lblCh1Temperature = new Label();
-            nudOffSet = new NumericUpDown();
-            btnOffsetApply = new Button();
             btnStart = new Button();
             btnStop = new Button();
             lblCh1 = new Label();
             lblCh2 = new Label();
+
+            lblCh1OffsetTitle = new Label();
+            lblCh1OffsetValue = new Label();
+            nudOffsetCh1 = new NumericUpDown();
+            btnOffsetApplyCh1 = new Button();
+
+            lblCh2OffsetTitle = new Label();
+            lblCh2OffsetValue = new Label();
+            nudOffsetCh2 = new NumericUpDown();
+            btnOffsetApplyCh2 = new Button();
+
             dataGridView1 = new DataGridView();
             tlpCommStatus = new TableLayoutPanel();
             lblThermoPortStatus = new Label();
@@ -58,7 +65,8 @@ namespace ThermoBathCalibrator
             tlpSetting.SuspendLayout();
             pnlBacrground.SuspendLayout();
             tlpbutton.SuspendLayout();
-            ((System.ComponentModel.ISupportInitialize)nudOffSet).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)nudOffsetCh1).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)nudOffsetCh2).BeginInit();
             ((System.ComponentModel.ISupportInitialize)dataGridView1).BeginInit();
             tlpCommStatus.SuspendLayout();
             SuspendLayout();
@@ -78,7 +86,6 @@ namespace ThermoBathCalibrator
             tlpSetting.BackColor = Color.White;
             tlpSetting.CellBorderStyle = TableLayoutPanelCellBorderStyle.Single;
 
-            // Test 버튼 삭제 → 1컬럼으로 축소
             tlpSetting.ColumnCount = 1;
             tlpSetting.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             tlpSetting.Controls.Add(btnComSetting, 0, 0);
@@ -95,8 +102,6 @@ namespace ThermoBathCalibrator
             btnComSetting.BackColor = SystemColors.Control;
             btnComSetting.Font = new Font("Segoe UI Semibold", 14.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
             btnComSetting.ForeColor = SystemColors.ControlText;
-
-            // 1칸을 꽉 채우도록 사이즈만 조정(원하면 Dock=Fill로 바꿔도 됨)
             btnComSetting.Location = new Point(4, 4);
             btnComSetting.Name = "btnComSetting";
             btnComSetting.Size = new Size(254, 51);
@@ -150,59 +155,56 @@ namespace ThermoBathCalibrator
             // tlpbutton
             // 
             tlpbutton.CellBorderStyle = TableLayoutPanelCellBorderStyle.Single;
-            tlpbutton.ColumnCount = 5;
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F));
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F));
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F));
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F));
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F));
-            tlpbutton.Controls.Add(lblOffsetValue, 1, 1);
-            tlpbutton.Controls.Add(lblOffset, 0, 1);
-            tlpbutton.Controls.Add(lblCh2Temperature, 3, 0);
-            tlpbutton.Controls.Add(lblCh1Temperature, 1, 0);
-            tlpbutton.Controls.Add(nudOffSet, 2, 1);
-            tlpbutton.Controls.Add(btnOffsetApply, 3, 1);
-            tlpbutton.Controls.Add(btnStart, 4, 0);
-            tlpbutton.Controls.Add(btnStop, 4, 1);
-            tlpbutton.Controls.Add(lblCh1, 0, 0);
-            tlpbutton.Controls.Add(lblCh2, 2, 0);
-            tlpbutton.Location = new Point(11, 87);
-            tlpbutton.Name = "tlpbutton";
+
+            // 기존 느낌(테이블) 유지하면서 Offset을 CH1/CH2로 분리하기 위해 9열로 확장
+            // 마지막(9번째) 열은 Start/Stop 고정
+            tlpbutton.ColumnCount = 9;
+            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F)); // 0
+            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F)); // 1
+            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F)); // 2
+            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F)); // 3
+            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F)); // 4
+            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F)); // 5
+            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F)); // 6
+            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F)); // 7
+            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 12F)); // 8
+
             tlpbutton.RowCount = 2;
             tlpbutton.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
             tlpbutton.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+
+            // Row 0 (현재온도 표시 + Start)
+            tlpbutton.Controls.Add(lblCh1, 0, 0);
+            tlpbutton.Controls.Add(lblCh1Temperature, 1, 0);
+            tlpbutton.Controls.Add(lblCh2, 4, 0);
+            tlpbutton.Controls.Add(lblCh2Temperature, 5, 0);
+            tlpbutton.Controls.Add(btnStart, 8, 0);
+
+            // Row 1 (CH1 Offset + CH2 Offset + Stop)
+            tlpbutton.Controls.Add(lblCh1OffsetTitle, 0, 1);
+            tlpbutton.Controls.Add(lblCh1OffsetValue, 1, 1);
+            tlpbutton.Controls.Add(nudOffsetCh1, 2, 1);
+            tlpbutton.Controls.Add(btnOffsetApplyCh1, 3, 1);
+
+            tlpbutton.Controls.Add(lblCh2OffsetTitle, 4, 1);
+            tlpbutton.Controls.Add(lblCh2OffsetValue, 5, 1);
+            tlpbutton.Controls.Add(nudOffsetCh2, 6, 1);
+            tlpbutton.Controls.Add(btnOffsetApplyCh2, 7, 1);
+
+            tlpbutton.Controls.Add(btnStop, 8, 1);
+
+            tlpbutton.Location = new Point(11, 87);
+            tlpbutton.Name = "tlpbutton";
             tlpbutton.Size = new Size(1452, 101);
             tlpbutton.TabIndex = 7;
-            // 
-            // lblOffsetValue
-            // 
-            lblOffsetValue.BackColor = SystemColors.Control;
-            lblOffsetValue.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblOffsetValue.Location = new Point(294, 51);
-            lblOffsetValue.Name = "lblOffsetValue";
-            lblOffsetValue.Size = new Size(283, 49);
-            lblOffsetValue.TabIndex = 20;
-            lblOffsetValue.Text = "0";
-            lblOffsetValue.TextAlign = ContentAlignment.MiddleCenter;
-            // 
-            // lblOffset
-            // 
-            lblOffset.BackColor = SystemColors.Control;
-            lblOffset.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblOffset.Location = new Point(4, 51);
-            lblOffset.Name = "lblOffset";
-            lblOffset.Size = new Size(283, 49);
-            lblOffset.TabIndex = 19;
-            lblOffset.Text = "Offset";
-            lblOffset.TextAlign = ContentAlignment.MiddleCenter;
             // 
             // lblCh2Temperature
             // 
             lblCh2Temperature.BackColor = SystemColors.Control;
             lblCh2Temperature.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh2Temperature.Location = new Point(874, 1);
+            lblCh2Temperature.Location = new Point(805, 1);
             lblCh2Temperature.Name = "lblCh2Temperature";
-            lblCh2Temperature.Size = new Size(283, 49);
+            lblCh2Temperature.Size = new Size(152, 49);
             lblCh2Temperature.TabIndex = 18;
             lblCh2Temperature.Text = "0";
             lblCh2Temperature.TextAlign = ContentAlignment.MiddleCenter;
@@ -211,37 +213,19 @@ namespace ThermoBathCalibrator
             // 
             lblCh1Temperature.BackColor = SystemColors.Control;
             lblCh1Temperature.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh1Temperature.Location = new Point(294, 1);
+            lblCh1Temperature.Location = new Point(161, 1);
             lblCh1Temperature.Name = "lblCh1Temperature";
-            lblCh1Temperature.Size = new Size(283, 49);
+            lblCh1Temperature.Size = new Size(152, 49);
             lblCh1Temperature.TabIndex = 17;
             lblCh1Temperature.Text = "0";
             lblCh1Temperature.TextAlign = ContentAlignment.MiddleCenter;
             // 
-            // nudOffSet
-            // 
-            nudOffSet.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            nudOffSet.Location = new Point(584, 54);
-            nudOffSet.Name = "nudOffSet";
-            nudOffSet.Size = new Size(283, 43);
-            nudOffSet.TabIndex = 11;
-            // 
-            // btnOffsetApply
-            // 
-            btnOffsetApply.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            btnOffsetApply.Location = new Point(874, 54);
-            btnOffsetApply.Name = "btnOffsetApply";
-            btnOffsetApply.Size = new Size(283, 43);
-            btnOffsetApply.TabIndex = 12;
-            btnOffsetApply.Text = "Apply";
-            btnOffsetApply.UseVisualStyleBackColor = true;
-            // 
             // btnStart
             // 
             btnStart.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            btnStart.Location = new Point(1164, 4);
+            btnStart.Location = new Point(1283, 4);
             btnStart.Name = "btnStart";
-            btnStart.Size = new Size(284, 43);
+            btnStart.Size = new Size(165, 43);
             btnStart.TabIndex = 13;
             btnStart.Text = "Start";
             btnStart.UseVisualStyleBackColor = true;
@@ -249,9 +233,9 @@ namespace ThermoBathCalibrator
             // btnStop
             // 
             btnStop.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            btnStop.Location = new Point(1164, 54);
+            btnStop.Location = new Point(1283, 54);
             btnStop.Name = "btnStop";
-            btnStop.Size = new Size(284, 43);
+            btnStop.Size = new Size(165, 43);
             btnStop.TabIndex = 14;
             btnStop.Text = "Stop";
             btnStop.UseVisualStyleBackColor = true;
@@ -262,7 +246,7 @@ namespace ThermoBathCalibrator
             lblCh1.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
             lblCh1.Location = new Point(4, 1);
             lblCh1.Name = "lblCh1";
-            lblCh1.Size = new Size(283, 49);
+            lblCh1.Size = new Size(150, 49);
             lblCh1.TabIndex = 15;
             lblCh1.Text = "CH1";
             lblCh1.TextAlign = ContentAlignment.MiddleCenter;
@@ -271,12 +255,92 @@ namespace ThermoBathCalibrator
             // 
             lblCh2.BackColor = SystemColors.Control;
             lblCh2.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh2.Location = new Point(584, 1);
+            lblCh2.Location = new Point(648, 1);
             lblCh2.Name = "lblCh2";
-            lblCh2.Size = new Size(283, 49);
+            lblCh2.Size = new Size(150, 49);
             lblCh2.TabIndex = 16;
             lblCh2.Text = "CH2";
             lblCh2.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // lblCh1OffsetTitle
+            // 
+            lblCh1OffsetTitle.BackColor = SystemColors.Control;
+            lblCh1OffsetTitle.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            lblCh1OffsetTitle.Location = new Point(4, 51);
+            lblCh1OffsetTitle.Name = "lblCh1OffsetTitle";
+            lblCh1OffsetTitle.Size = new Size(150, 49);
+            lblCh1OffsetTitle.TabIndex = 19;
+            lblCh1OffsetTitle.Text = "CH1 Off";
+            lblCh1OffsetTitle.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // lblCh1OffsetValue
+            // 
+            lblCh1OffsetValue.BackColor = SystemColors.Control;
+            lblCh1OffsetValue.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            lblCh1OffsetValue.Location = new Point(161, 51);
+            lblCh1OffsetValue.Name = "lblCh1OffsetValue";
+            lblCh1OffsetValue.Size = new Size(152, 49);
+            lblCh1OffsetValue.TabIndex = 20;
+            lblCh1OffsetValue.Text = "0.0";
+            lblCh1OffsetValue.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // nudOffsetCh1
+            // 
+            nudOffsetCh1.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            nudOffsetCh1.Location = new Point(320, 54);
+            nudOffsetCh1.Name = "nudOffsetCh1";
+            nudOffsetCh1.Size = new Size(152, 43);
+            nudOffsetCh1.TabIndex = 11;
+            // 
+            // btnOffsetApplyCh1
+            // 
+            btnOffsetApplyCh1.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            btnOffsetApplyCh1.Location = new Point(479, 54);
+            btnOffsetApplyCh1.Name = "btnOffsetApplyCh1";
+            btnOffsetApplyCh1.Size = new Size(152, 43);
+            btnOffsetApplyCh1.TabIndex = 12;
+            btnOffsetApplyCh1.Text = "Apply";
+            btnOffsetApplyCh1.UseVisualStyleBackColor = true;
+            // 
+            // lblCh2OffsetTitle
+            // 
+            lblCh2OffsetTitle.BackColor = SystemColors.Control;
+            lblCh2OffsetTitle.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            lblCh2OffsetTitle.Location = new Point(648, 51);
+            lblCh2OffsetTitle.Name = "lblCh2OffsetTitle";
+            lblCh2OffsetTitle.Size = new Size(150, 49);
+            lblCh2OffsetTitle.TabIndex = 21;
+            lblCh2OffsetTitle.Text = "CH2 Off";
+            lblCh2OffsetTitle.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // lblCh2OffsetValue
+            // 
+            lblCh2OffsetValue.BackColor = SystemColors.Control;
+            lblCh2OffsetValue.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            lblCh2OffsetValue.Location = new Point(805, 51);
+            lblCh2OffsetValue.Name = "lblCh2OffsetValue";
+            lblCh2OffsetValue.Size = new Size(152, 49);
+            lblCh2OffsetValue.TabIndex = 22;
+            lblCh2OffsetValue.Text = "0.0";
+            lblCh2OffsetValue.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // nudOffsetCh2
+            // 
+            nudOffsetCh2.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            nudOffsetCh2.Location = new Point(964, 54);
+            nudOffsetCh2.Name = "nudOffsetCh2";
+            nudOffsetCh2.Size = new Size(152, 43);
+            nudOffsetCh2.TabIndex = 23;
+            // 
+            // btnOffsetApplyCh2
+            // 
+            btnOffsetApplyCh2.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            btnOffsetApplyCh2.Location = new Point(1123, 54);
+            btnOffsetApplyCh2.Name = "btnOffsetApplyCh2";
+            btnOffsetApplyCh2.Size = new Size(152, 43);
+            btnOffsetApplyCh2.TabIndex = 24;
+            btnOffsetApplyCh2.Text = "Apply";
+            btnOffsetApplyCh2.UseVisualStyleBackColor = true;
             // 
             // dataGridView1
             // 
@@ -315,7 +379,6 @@ namespace ThermoBathCalibrator
             tlpCommStatus.BackColor = SystemColors.Control;
             tlpCommStatus.CellBorderStyle = TableLayoutPanelCellBorderStyle.Single;
 
-            // 3칸 → 1칸(BOARD 상태만)
             tlpCommStatus.ColumnCount = 1;
             tlpCommStatus.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             tlpCommStatus.Controls.Add(lblThermoPortStatus, 0, 0);
@@ -337,8 +400,6 @@ namespace ThermoBathCalibrator
             lblThermoPortStatus.Name = "lblThermoPortStatus";
             lblThermoPortStatus.Size = new Size(1451, 34);
             lblThermoPortStatus.TabIndex = 2;
-
-            // 기본 텍스트도 BOARD로 변경(코드에서 덮어써도 OK)
             lblThermoPortStatus.Text = "BOARD";
             lblThermoPortStatus.TextAlign = ContentAlignment.MiddleCenter;
             // 
@@ -430,7 +491,8 @@ namespace ThermoBathCalibrator
             tlpSetting.ResumeLayout(false);
             pnlBacrground.ResumeLayout(false);
             tlpbutton.ResumeLayout(false);
-            ((System.ComponentModel.ISupportInitialize)nudOffSet).EndInit();
+            ((System.ComponentModel.ISupportInitialize)nudOffsetCh1).EndInit();
+            ((System.ComponentModel.ISupportInitialize)nudOffsetCh2).EndInit();
             ((System.ComponentModel.ISupportInitialize)dataGridView1).EndInit();
             tlpCommStatus.ResumeLayout(false);
             ResumeLayout(false);
@@ -447,20 +509,11 @@ namespace ThermoBathCalibrator
         private TableLayoutPanel tlpSetting;
 
         private TableLayoutPanel tlpCommStatus;
-
-        // BATH1/BATH2 라벨 제거
-        // private Label lblBath1PortStatus;
-        // private Label lblBath2PortStatus;
-
         private Label lblThermoPortStatus;
 
         private Panel pnlCh2Graph;
         private Panel pnlCh1Graph;
 
-        private NumericUpDown nudOffSet;
-        private Button btnOffsetApply;
-        private Label lblOffsetValue;
-        private Label lblOffset;
         private Label lblCh2Temperature;
         private Label lblCh1Temperature;
         private Button btnStart;
@@ -468,8 +521,17 @@ namespace ThermoBathCalibrator
         private Label lblCh1;
         private Label lblCh2;
 
-        // Test 버튼 제거
-        // private Button btnTest;
+        // CH1 Offset UI
+        private Label lblCh1OffsetTitle;
+        private Label lblCh1OffsetValue;
+        private NumericUpDown nudOffsetCh1;
+        private Button btnOffsetApplyCh1;
+
+        // CH2 Offset UI
+        private Label lblCh2OffsetTitle;
+        private Label lblCh2OffsetValue;
+        private NumericUpDown nudOffsetCh2;
+        private Button btnOffsetApplyCh2;
 
         private DataGridViewTextBoxColumn colTimestamp;
         private DataGridViewTextBoxColumn colUtCh1;

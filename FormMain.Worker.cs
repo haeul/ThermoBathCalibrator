@@ -31,8 +31,7 @@ namespace ThermoBathCalibrator
                             AppendRowToGrid(row);
                             AppendRowToHistory(row);
 
-                            double offsetAvg = AverageOrNaN(row.Bath1OffsetCur, row.Bath2OffsetCur);
-                            UpdateTopNumbers(row.UtCh1, row.UtCh2, offsetAvg);
+                            UpdateTopNumbers(row.UtCh1, row.UtCh2);
 
                             UpdateStatusLabels();
                             pnlCh1Graph.Invalidate();
@@ -90,9 +89,11 @@ namespace ThermoBathCalibrator
 
             if (readOk)
             {
-                _bath1OffsetCur = snap.Ch1OffsetCur;
-                _bath2OffsetCur = snap.Ch2OffsetCur;
-
+                lock (_offsetStateSync)
+                {
+                    _bath1OffsetCur = snap.Ch1OffsetCur;
+                    _bath2OffsetCur = snap.Ch2OffsetCur;
+                }
                 LogOffsetReadAndMismatch(channel: 1, readOffset: snap.Ch1OffsetCur, response: snap.Ch1Response);
                 LogOffsetReadAndMismatch(channel: 2, readOffset: snap.Ch2OffsetCur, response: snap.Ch2Response);
             }
@@ -120,26 +121,33 @@ namespace ThermoBathCalibrator
             double lastWriteAgeCh1Sec = (_lastWriteCh1 == DateTime.MinValue) ? double.NaN : (now - _lastWriteCh1).TotalSeconds;
             double lastWriteAgeCh2Sec = (_lastWriteCh2 == DateTime.MinValue) ? double.NaN : (now - _lastWriteCh2).TotalSeconds;
 
-            double appliedToSend1 = _bath1OffsetCur;
-            double appliedToSend2 = _bath2OffsetCur;
+            double currentOffset1;
+            double currentOffset2;
+            lock (_offsetStateSync)
+            {
+                currentOffset1 = _bath1OffsetCur;
+                currentOffset2 = _bath2OffsetCur;
+            }
 
+            double appliedToSend1 = currentOffset1;
+            double appliedToSend2 = currentOffset2;
             double next1 = _autoCtrl.UpdateAndMaybeWrite(
                 channel: 1,
                 now: now,
                 readOk: readOk,
                 ut: utCh1,
                 err: err1,
-                currentOffset: _bath1OffsetCur,
+                currentOffset: currentOffset1,
                 tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
                 traceLog: TraceModbus
             );
 
-            if (Math.Abs(next1 - _bath1OffsetCur) > 1e-9)
-            {
-                _bath1OffsetCur = next1;
-                _lastWriteCh1 = now;
-            }
-            appliedToSend1 = _bath1OffsetCur;
+            //if (Math.Abs(next1 - currentOffset1) > 1e-9)
+            //{
+            //    lock (_offsetStateSync) { _bath1OffsetCur = next1; }
+            //    _lastWriteCh1 = now;
+            //}
+            appliedToSend1 = next1;
 
             double next2 = _autoCtrl.UpdateAndMaybeWrite(
                 channel: 2,
@@ -147,21 +155,28 @@ namespace ThermoBathCalibrator
                 readOk: readOk,
                 ut: utCh2,
                 err: err2,
-                currentOffset: _bath2OffsetCur,
+                currentOffset: currentOffset2,
                 tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
                 traceLog: TraceModbus
             );
 
-            if (Math.Abs(next2 - _bath2OffsetCur) > 1e-9)
+            //if (Math.Abs(next2 - currentOffset2) > 1e-9)
+            //{
+            //    lock (_offsetStateSync) { _bath2OffsetCur = next2; }
+            //    _lastWriteCh2 = now;
+            //}
+            appliedToSend2 = next2;
+
+            double finalOffset1;
+            double finalOffset2;
+            lock (_offsetStateSync)
             {
-                _bath2OffsetCur = next2;
-                _lastWriteCh2 = now;
+                finalOffset1 = _bath1OffsetCur;
+                finalOffset2 = _bath2OffsetCur;
             }
-            appliedToSend2 = _bath2OffsetCur;
 
-            double bath1SetTemp = (!double.IsNaN(_bath1OffsetCur)) ? _bath1Setpoint + _bath1OffsetCur : double.NaN;
-            double bath2SetTemp = (!double.IsNaN(_bath2OffsetCur)) ? _bath2Setpoint + _bath2OffsetCur : double.NaN;
-
+            double bath1SetTemp = (!double.IsNaN(finalOffset1)) ? _bath1Setpoint + finalOffset1 : double.NaN;
+            double bath2SetTemp = (!double.IsNaN(finalOffset2)) ? _bath2Setpoint + finalOffset2 : double.NaN;
             _ = stale;
 
             return new SampleRow
@@ -178,8 +193,8 @@ namespace ThermoBathCalibrator
                 Err1 = err1,
                 Err2 = err2,
 
-                Bath1OffsetCur = _bath1OffsetCur,
-                Bath2OffsetCur = _bath2OffsetCur,
+                Bath1OffsetCur = finalOffset1,
+                Bath2OffsetCur = finalOffset2,
 
                 Derr1 = derr1,
                 Derr2 = derr2,

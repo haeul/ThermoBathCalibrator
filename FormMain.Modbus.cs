@@ -234,6 +234,71 @@ namespace ThermoBathCalibrator
             };
         }
 
+        private bool TryReadOffsetFromDevice(int channel, out double offset)
+        {
+            offset = double.NaN;
+
+            if (!_mb.IsConnected)
+            {
+                _boardConnected = TryConnectWithCooldown();
+                if (!_boardConnected) _boardFailCount++;
+            }
+
+            if (!_mb.IsConnected)
+            {
+                _boardConnected = false;
+                TraceModbus($"OFFSET READBACK FAIL ch={channel} reason=not_connected");
+                return false;
+            }
+
+            ushort start = channel == 1 ? RegCh1OffsetCur : RegCh2OffsetCur;
+            if (!_mb.TryReadHoldingRegisters(start, 1, out ushort[] regs, out string err))
+            {
+                _boardConnected = false;
+                _boardFailCount++;
+                TraceModbus($"OFFSET READBACK FAIL ch={channel} reason=read_register err={err}");
+                return false;
+            }
+
+            _boardConnected = true;
+
+            if (regs == null || regs.Length < 1)
+            {
+                TraceModbus($"OFFSET READBACK FAIL ch={channel} reason=empty_response");
+                return false;
+            }
+
+            short raw10 = unchecked((short)regs[0]);
+            offset = raw10 / 10.0;
+            TraceModbus($"OFFSET READBACK OK ch={channel} read={offset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10}");
+            return true;
+        }
+
+        private bool TrySyncOffsetsFromDevice(string reason)
+        {
+            bool ok1 = TryReadOffsetFromDevice(channel: 1, out double ch1Offset);
+            bool ok2 = TryReadOffsetFromDevice(channel: 2, out double ch2Offset);
+
+            if (!ok1 || !ok2)
+            {
+                TraceModbus($"OFFSET SYNC FAIL reason={reason} ch1Ok={ok1} ch2Ok={ok2}");
+                return false;
+            }
+
+            lock (_offsetStateSync)
+            {
+                _bath1OffsetCur = ch1Offset;
+                _bath2OffsetCur = ch2Offset;
+            }
+
+            _lastWrittenOffsetCh1 = ch1Offset;
+            _lastWrittenOffsetCh2 = ch2Offset;
+
+            TraceModbus($"OFFSET SYNC OK reason={reason} ch1={ch1Offset.ToString("0.0", CultureInfo.InvariantCulture)} ch2={ch2Offset.ToString("0.0", CultureInfo.InvariantCulture)}");
+            BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
+            return true;
+        }
+
         private bool TryWriteChannelOffset(int channel, double appliedOffset, string reason = "UNSPECIFIED")
         {
             if (!_mb.IsConnected)
@@ -263,7 +328,16 @@ namespace ThermoBathCalibrator
 
                 TraceModbus($"OFFSET WRITE TRY ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} cmd=0x{cmd:X4} svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
                 bool ok = TryWriteAndWaitAck(channel: 1, cmd: cmd, svWord: svWord, offsetWord: offsetWord, reason: reason, desiredOffset: appliedOffset, raw10: raw10, out string errWriteAndAck);
-                if (ok) _lastWrittenOffsetCh1 = appliedOffset;
+                if (ok)
+                {
+                    lock (_offsetStateSync)
+                    {
+                        _bath1OffsetCur = appliedOffset;
+                    }
+                    _lastWrittenOffsetCh1 = appliedOffset;
+                    _lastWriteCh1 = DateTime.Now;
+                    BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
+                }
                 else TraceModbus($"OFFSET WRITE FAIL ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
                 return ok;
             }
@@ -277,7 +351,16 @@ namespace ThermoBathCalibrator
 
                 TraceModbus($"OFFSET WRITE TRY ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} cmd=0x{cmd:X4} svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
                 bool ok = TryWriteAndWaitAck(channel: 2, cmd: cmd, svWord: svWord, offsetWord: offsetWord, reason: reason, desiredOffset: appliedOffset, raw10: raw10, out string errWriteAndAck);
-                if (ok) _lastWrittenOffsetCh2 = appliedOffset;
+                if (ok)
+                {
+                    lock (_offsetStateSync)
+                    {
+                        _bath2OffsetCur = appliedOffset;
+                    }
+                    _lastWrittenOffsetCh2 = appliedOffset;
+                    _lastWriteCh2 = DateTime.Now;
+                    BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
+                }
                 else TraceModbus($"OFFSET WRITE FAIL ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
                 return ok;
             }
