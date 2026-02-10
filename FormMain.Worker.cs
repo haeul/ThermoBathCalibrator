@@ -130,7 +130,8 @@ namespace ThermoBathCalibrator
                 ut: utCh1,
                 err: err1,
                 currentOffset: _bath1OffsetCur,
-                tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason)
+                tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
+                traceLog: TraceModbus
             );
 
             if (Math.Abs(next1 - _bath1OffsetCur) > 1e-9)
@@ -147,7 +148,8 @@ namespace ThermoBathCalibrator
                 ut: utCh2,
                 err: err2,
                 currentOffset: _bath2OffsetCur,
-                tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason)
+                tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
+                traceLog: TraceModbus
             );
 
             if (Math.Abs(next2 - _bath2OffsetCur) > 1e-9)
