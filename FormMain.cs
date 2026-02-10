@@ -72,6 +72,11 @@ namespace ThermoBathCalibrator
         private DateTime _lastWriteCh1 = DateTime.MinValue;
         private DateTime _lastWriteCh2 = DateTime.MinValue;
 
+        private DateTime _lastEnforceWriteCh1 = DateTime.MinValue;
+        private DateTime _lastEnforceWriteCh2 = DateTime.MinValue;
+        private double _lastWrittenOffsetCh1 = double.NaN;
+        private double _lastWrittenOffsetCh2 = double.NaN;
+
         // 워커 스레드(통신/로깅)
         private Thread? _workerThread;
         private volatile bool _workerRunning;
@@ -105,6 +110,9 @@ namespace ThermoBathCalibrator
         private const int AckTimeoutMs = 1500;
         private const int AckPollIntervalMs = 100;
         private const int AckInitialDelayMs = 120;
+
+        private const double OffsetReadbackMismatchEpsilon = 0.049;
+        private const double EnforceWriteIntervalSeconds = 1.0;
 
         public FormMain()
         {
@@ -191,6 +199,11 @@ namespace ThermoBathCalibrator
             _prevErr2 = double.NaN;
             _lastWriteCh1 = DateTime.MinValue;
             _lastWriteCh2 = DateTime.MinValue;
+
+            _lastEnforceWriteCh1 = DateTime.MinValue;
+            _lastEnforceWriteCh2 = DateTime.MinValue;
+            _lastWrittenOffsetCh1 = double.NaN;
+            _lastWrittenOffsetCh2 = double.NaN;
 
             _hasLastGoodSnap = false;
             _lastGoodSnap = default;
@@ -284,8 +297,8 @@ namespace ThermoBathCalibrator
             double applied = QuantizeOffset(offset, step: OffsetStep);
             applied = Clamp(applied, OffsetClampMin, OffsetClampMax);
 
-            bool ok1 = TryWriteChannelOffset(channel: 1, appliedOffset: applied);
-            bool ok2 = TryWriteChannelOffset(channel: 2, appliedOffset: applied);
+            bool ok1 = TryWriteChannelOffset(channel: 1, appliedOffset: applied, reason: "MANUAL_APPLY");
+            bool ok2 = TryWriteChannelOffset(channel: 2, appliedOffset: applied, reason: "MANUAL_APPLY");
 
             if (ok1)
             {
@@ -394,6 +407,13 @@ namespace ThermoBathCalibrator
             {
                 _bath1OffsetCur = snap.Ch1OffsetCur;
                 _bath2OffsetCur = snap.Ch2OffsetCur;
+
+                LogOffsetReadAndMismatch(channel: 1, readOffset: snap.Ch1OffsetCur, response: snap.Ch1Response);
+                LogOffsetReadAndMismatch(channel: 2, readOffset: snap.Ch2OffsetCur, response: snap.Ch2Response);
+            }
+            else
+            {
+                TraceModbus("OFFSET READ SKIP readOk=false (cannot compare readback)");
             }
 
             // =================================================================================
@@ -431,14 +451,16 @@ namespace ThermoBathCalibrator
             // CH1
             if (readOk && !double.IsNaN(utCh1))
             {
-                if ((now - _lastSimpleAdjustCh1).TotalSeconds >= SimpleHoldSeconds)
+                bool holdElapsed = (now - _lastSimpleAdjustCh1).TotalSeconds >= SimpleHoldSeconds;
+
+                if (holdElapsed)
                 {
                     if (utCh1 > TargetTemp + 0.001)
                     {
                         double next = Clamp(_bath1OffsetCur + SimpleStep, OffsetClampMin, OffsetClampMax);
                         next = QuantizeOffset(next, OffsetStep);
 
-                        if (TryWriteChannelOffset(1, next))
+                        if (TryWriteChannelOffset(1, next, "AUTO_STEP_CH1"))
                         {
                             _bath1OffsetCur = next;
                             _lastWriteCh1 = now;
@@ -450,13 +472,34 @@ namespace ThermoBathCalibrator
                         double next = Clamp(_bath1OffsetCur - SimpleStep, OffsetClampMin, OffsetClampMax);
                         next = QuantizeOffset(next, OffsetStep);
 
-                        if (TryWriteChannelOffset(1, next))
+                        if (TryWriteChannelOffset(1, next, "AUTO_STEP_CH1"))
                         {
                             _bath1OffsetCur = next;
                             _lastWriteCh1 = now;
                             _lastSimpleAdjustCh1 = now;
                         }
                     }
+                    else
+                    {
+                        TraceModbus($"OFFSET AUTO SKIP ch=1 reason=in_deadband ut={utCh1.ToString("0.000", CultureInfo.InvariantCulture)} target={TargetTemp.ToString("0.000", CultureInfo.InvariantCulture)}");
+                    }
+                }
+                else
+                {
+                    double holdLeft = SimpleHoldSeconds - (now - _lastSimpleAdjustCh1).TotalSeconds;
+                    TraceModbus($"OFFSET AUTO SKIP ch=1 reason=hold remainSec={Math.Max(0.0, holdLeft).ToString("0.0", CultureInfo.InvariantCulture)}");
+                    EnforceLastWrittenOffsetIfNeeded(1, now, snap.Ch1OffsetCur, snap.Ch1Response);
+                }
+            }
+            else
+            {
+                if (!readOk)
+                {
+                    TraceModbus("OFFSET AUTO SKIP ch=1 reason=readOk_false");
+                }
+                else
+                {
+                    TraceModbus("OFFSET AUTO SKIP ch=1 reason=ut_nan");
                 }
             }
             appliedToSend1 = _bath1OffsetCur;
@@ -464,14 +507,16 @@ namespace ThermoBathCalibrator
             // CH2
             if (readOk && !double.IsNaN(utCh2))
             {
-                if ((now - _lastSimpleAdjustCh2).TotalSeconds >= SimpleHoldSeconds)
+                bool holdElapsed = (now - _lastSimpleAdjustCh2).TotalSeconds >= SimpleHoldSeconds;
+
+                if (holdElapsed)
                 {
                     if (utCh2 > TargetTemp + 0.001)
                     {
                         double next = Clamp(_bath2OffsetCur + SimpleStep, OffsetClampMin, OffsetClampMax);
                         next = QuantizeOffset(next, OffsetStep);
 
-                        if (TryWriteChannelOffset(2, next))
+                        if (TryWriteChannelOffset(2, next, "AUTO_STEP_CH2"))
                         {
                             _bath2OffsetCur = next;
                             _lastWriteCh2 = now;
@@ -483,13 +528,34 @@ namespace ThermoBathCalibrator
                         double next = Clamp(_bath2OffsetCur - SimpleStep, OffsetClampMin, OffsetClampMax);
                         next = QuantizeOffset(next, OffsetStep);
 
-                        if (TryWriteChannelOffset(2, next))
+                        if (TryWriteChannelOffset(2, next, "AUTO_STEP_CH2"))
                         {
                             _bath2OffsetCur = next;
                             _lastWriteCh2 = now;
                             _lastSimpleAdjustCh2 = now;
                         }
                     }
+                    else
+                    {
+                        TraceModbus($"OFFSET AUTO SKIP ch=2 reason=in_deadband ut={utCh2.ToString("0.000", CultureInfo.InvariantCulture)} target={TargetTemp.ToString("0.000", CultureInfo.InvariantCulture)}");
+                    }
+                }
+                else
+                {
+                    double holdLeft = SimpleHoldSeconds - (now - _lastSimpleAdjustCh2).TotalSeconds;
+                    TraceModbus($"OFFSET AUTO SKIP ch=2 reason=hold remainSec={Math.Max(0.0, holdLeft).ToString("0.0", CultureInfo.InvariantCulture)}");
+                    EnforceLastWrittenOffsetIfNeeded(2, now, snap.Ch2OffsetCur, snap.Ch2Response);
+                }
+            }
+            else
+            {
+                if (!readOk)
+                {
+                    TraceModbus("OFFSET AUTO SKIP ch=2 reason=readOk_false");
+                }
+                else
+                {
+                    TraceModbus("OFFSET AUTO SKIP ch=2 reason=ut_nan");
                 }
             }
             appliedToSend2 = _bath2OffsetCur;
@@ -707,7 +773,7 @@ namespace ThermoBathCalibrator
             };
         }
 
-        private bool TryWriteChannelOffset(int channel, double appliedOffset)
+        private bool TryWriteChannelOffset(int channel, double appliedOffset, string reason = "UNSPECIFIED")
         {
             if (!_mb.IsConnected)
             {
@@ -718,6 +784,7 @@ namespace ThermoBathCalibrator
             if (!_mb.IsConnected)
             {
                 _boardConnected = false;
+                TraceModbus($"OFFSET WRITE SKIP ch={channel} reason={reason} not_connected");
                 return false;
             }
 
@@ -733,7 +800,18 @@ namespace ThermoBathCalibrator
 
                 ushort svWord = unchecked((ushort)((short)Math.Round(_bath1Setpoint * 10.0, MidpointRounding.AwayFromZero)));
 
-                return TryWriteAndWaitAck(channel: 1, cmd: cmd, svWord: svWord, offsetWord: offsetWord, out _);
+                TraceModbus($"OFFSET WRITE TRY ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} cmd=0x{cmd:X4} svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
+                bool ok = TryWriteAndWaitAck(channel: 1, cmd: cmd, svWord: svWord, offsetWord: offsetWord, reason: reason, desiredOffset: appliedOffset, raw10: raw10, out string errWriteAndAck);
+                if (ok)
+                {
+                    _lastWrittenOffsetCh1 = appliedOffset;
+                }
+                else
+                {
+                    TraceModbus($"OFFSET WRITE FAIL ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
+                }
+
+                return ok;
             }
 
             if (channel == 2)
@@ -743,13 +821,24 @@ namespace ThermoBathCalibrator
 
                 ushort svWord = unchecked((ushort)((short)Math.Round(_bath2Setpoint * 10.0, MidpointRounding.AwayFromZero)));
 
-                return TryWriteAndWaitAck(channel: 2, cmd: cmd, svWord: svWord, offsetWord: offsetWord, out _);
+                TraceModbus($"OFFSET WRITE TRY ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} cmd=0x{cmd:X4} svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
+                bool ok = TryWriteAndWaitAck(channel: 2, cmd: cmd, svWord: svWord, offsetWord: offsetWord, reason: reason, desiredOffset: appliedOffset, raw10: raw10, out string errWriteAndAck);
+                if (ok)
+                {
+                    _lastWrittenOffsetCh2 = appliedOffset;
+                }
+                else
+                {
+                    TraceModbus($"OFFSET WRITE FAIL ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
+                }
+
+                return ok;
             }
 
             return false;
         }
 
-        private bool TryWriteAndWaitAck(int channel, ushort cmd, ushort svWord, ushort offsetWord, out string error)
+        private bool TryWriteAndWaitAck(int channel, ushort cmd, ushort svWord, ushort offsetWord, string reason, double desiredOffset, short raw10, out string error)
         {
             error = string.Empty;
 
@@ -759,8 +848,7 @@ namespace ThermoBathCalibrator
             if (!_mb.TryWriteMultipleRegisters(start, payload, out string errWrite))
             {
                 error = $"WRITE FAIL: {errWrite}";
-                TraceModbus($"WRITE FAIL ch={channel} start={start} err={errWrite}");
-                return false;
+                TraceModbus($"OFFSET WRITE FAIL ch={channel} reason={reason} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} start={start} err={errWrite}"); return false;
             }
 
             if (cmd == 0)
@@ -779,20 +867,18 @@ namespace ThermoBathCalibrator
                 {
                     if ((resp & ackMask) == ackMask)
                     {
-                        TraceModbus($"ACK OK ch={channel} resp=0x{resp:X4} mask=0x{ackMask:X4}");
-                        return true;
+                        TraceModbus($"OFFSET WRITE OK ch={channel} reason={reason} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} ackResp=0x{resp:X4} ackMask=0x{ackMask:X4}"); return true;
                     }
                 }
                 else
                 {
-                    TraceModbus($"ACK READ FAIL ch={channel} err={errResp}");
+                    TraceModbus($"ACK READ FAIL ch={channel} reason={reason} err={errResp}");
                 }
 
                 Thread.Sleep(AckPollIntervalMs);
             }
 
-            error = $"ACK TIMEOUT ch={channel} mask=0x{ackMask:X4}";
-            TraceModbus(error);
+            error = $"ACK TIMEOUT ch={channel} reason={reason} mask=0x{ackMask:X4}"; TraceModbus(error);
             return false;
         }
 
@@ -811,6 +897,71 @@ namespace ThermoBathCalibrator
             response = regs.Length > 0 ? regs[0] : (ushort)0;
             return true;
         }
+
+        private void LogOffsetReadAndMismatch(int channel, double readOffset, ushort response)
+        {
+            double lastWritten = channel == 1 ? _lastWrittenOffsetCh1 : _lastWrittenOffsetCh2;
+
+            string readText = readOffset.ToString("0.0", CultureInfo.InvariantCulture);
+            if (double.IsNaN(lastWritten))
+            {
+                TraceModbus($"OFFSET READ ch={channel} read={readText} ackResp=0x{response:X4} lastWritten=NaN");
+                return;
+            }
+
+            double diff = Math.Abs(readOffset - lastWritten);
+            if (diff > OffsetReadbackMismatchEpsilon)
+            {
+                TraceModbus($"OFFSET READ MISMATCH ch={channel} read={readText} lastWritten={lastWritten.ToString("0.0", CultureInfo.InvariantCulture)} diff={diff.ToString("0.000", CultureInfo.InvariantCulture)} ackResp=0x{response:X4}");
+            }
+            else
+            {
+                TraceModbus($"OFFSET READ ch={channel} read={readText} lastWritten={lastWritten.ToString("0.0", CultureInfo.InvariantCulture)} ackResp=0x{response:X4}");
+            }
+        }
+
+        private void EnforceLastWrittenOffsetIfNeeded(int channel, DateTime now, double readOffset, ushort response)
+        {
+            double lastWritten = channel == 1 ? _lastWrittenOffsetCh1 : _lastWrittenOffsetCh2;
+            if (double.IsNaN(lastWritten))
+            {
+                TraceModbus($"OFFSET ENFORCE SKIP ch={channel} reason=no_last_written");
+                return;
+            }
+
+            double diff = Math.Abs(readOffset - lastWritten);
+            if (diff <= OffsetReadbackMismatchEpsilon)
+            {
+                return;
+            }
+
+            DateTime lastEnforce = channel == 1 ? _lastEnforceWriteCh1 : _lastEnforceWriteCh2;
+            double sinceEnforceSec = (lastEnforce == DateTime.MinValue) ? double.MaxValue : (now - lastEnforce).TotalSeconds;
+            if (sinceEnforceSec < EnforceWriteIntervalSeconds)
+            {
+                TraceModbus($"OFFSET ENFORCE SKIP ch={channel} reason=throttle sinceSec={sinceEnforceSec.ToString("0.000", CultureInfo.InvariantCulture)} read={readOffset.ToString("0.0", CultureInfo.InvariantCulture)} lastWritten={lastWritten.ToString("0.0", CultureInfo.InvariantCulture)} ackResp=0x{response:X4}");
+                return;
+            }
+
+            TraceModbus($"OFFSET ENFORCE TRY ch={channel} read={readOffset.ToString("0.0", CultureInfo.InvariantCulture)} lastWritten={lastWritten.ToString("0.0", CultureInfo.InvariantCulture)} diff={diff.ToString("0.000", CultureInfo.InvariantCulture)} ackResp=0x{response:X4}");
+            bool ok = TryWriteChannelOffset(channel, lastWritten, reason: "HOLD_ENFORCE");
+            if (ok)
+            {
+                if (channel == 1)
+                {
+                    _lastEnforceWriteCh1 = now;
+                    _bath1OffsetCur = lastWritten;
+                    _lastWriteCh1 = now;
+                }
+                else
+                {
+                    _lastEnforceWriteCh2 = now;
+                    _bath2OffsetCur = lastWritten;
+                    _lastWriteCh2 = now;
+                }
+            }
+        }
+
 
         private static double AverageOrNaN(double a, double b)
         {
