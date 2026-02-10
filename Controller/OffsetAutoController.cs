@@ -33,6 +33,11 @@ namespace ThermoBathCalibrator.Controller
 
             public int WorsenStreak;
             public DateTime FreezeUntil = DateTime.MinValue;
+
+            public bool TightDeadbandActive;
+            public int DivergenceStreak;
+
+            public readonly Queue<(DateTime t, double ut)> UtHist = new Queue<(DateTime, double)>();
         }
 
         private readonly OffsetAutoConfig _cfg;
@@ -80,6 +85,9 @@ namespace ThermoBathCalibrator.Controller
 
             s.WorsenStreak = 0;
             s.FreezeUntil = DateTime.MinValue;
+
+            s.TightDeadbandActive = false;
+            s.DivergenceStreak = 0;
         }
 
         private ChannelState GetState(int channel)
@@ -114,6 +122,25 @@ namespace ThermoBathCalibrator.Controller
                 return currentOffset;
             }
 
+            double dErr = (!double.IsNaN(st.PrevErr)) ? (err - st.PrevErr) : double.NaN;
+            double dUt = (!double.IsNaN(st.PrevUt)) ? (ut - st.PrevUt) : double.NaN;
+            double absErr = Math.Abs(err);
+
+            // Tight deadband with hysteresis to suppress dithering near target.
+            if (!st.TightDeadbandActive && absErr <= _cfg.TightDeadbandEnter)
+                st.TightDeadbandActive = true;
+            else if (st.TightDeadbandActive && absErr >= _cfg.TightDeadbandExit)
+                st.TightDeadbandActive = false;
+
+            if (st.TightDeadbandActive)
+            {
+                st.PwmActive = false;
+                st.PrevErr = err;
+                st.PrevUt = ut;
+                traceLog?.Invoke($"AUTO CTRL CH{channel} mode=HOLD_TIGHT_DEADBAND UT={utFmt(ut)} err={err:F4} enter={_cfg.TightDeadbandEnter:F4} exit={_cfg.TightDeadbandExit:F4}");
+                return currentOffset;
+            }
+
             // 2) Freeze window: no writes
             if (now < st.FreezeUntil)
             {
@@ -123,8 +150,15 @@ namespace ThermoBathCalibrator.Controller
                 return currentOffset;
             }
 
-            double absErr = Math.Abs(err);
-
+            // 3) Minimum hold after any successful write: wait thermal response.
+            double sinceWrite = (st.LastWrite == DateTime.MinValue) ? double.MaxValue : (now - st.LastWrite).TotalSeconds;
+            if (sinceWrite < _cfg.MinHoldAfterWriteSeconds)
+            {
+                st.PrevErr = err;
+                st.PrevUt = ut;
+                traceLog?.Invoke($"AUTO CTRL CH{channel} safety=POST_WRITE_HOLD skipWrite remain={(_cfg.MinHoldAfterWriteSeconds - sinceWrite):F1}s UT={utFmt(ut)} err={err:F4} dUT={dUtFmt(dUt)}");
+                return currentOffset;
+            }
             if (TryHandleWorseningRollback(channel, now, err, currentOffset, st, tryWriteOffset, traceLog))
             {
                 st.PrevErr = err;
@@ -132,9 +166,12 @@ namespace ThermoBathCalibrator.Controller
                 return currentOffset;
             }
 
-            double dErr = (!double.IsNaN(st.PrevErr)) ? (err - st.PrevErr) : double.NaN;
-            double dUt = (!double.IsNaN(st.PrevUt)) ? (ut - st.PrevUt) : double.NaN;
-
+            if (UpdateDivergenceGuard(channel, now, err, dUt, currentOffset, st, tryWriteOffset, traceLog))
+            {
+                st.PrevErr = err;
+                st.PrevUt = ut;
+                return currentOffset;
+            }
             bool overshoot = !double.IsNaN(st.PrevErr)
                 && Math.Sign(st.PrevErr) != 0
                 && Math.Sign(err) != 0
@@ -144,6 +181,16 @@ namespace ThermoBathCalibrator.Controller
             // err > 0 means UT is low and we need heating, so offset should go down.
             // err < 0 means UT is high and we need cooling, so offset should go up.
             int desiredDirection = -Math.Sign(err); // +1 => offset up(cool), -1 => offset down(heat)
+
+            double slopePerSec = ComputeWindowSlopePerSec(st, now, ut);
+
+            if (IsSlopeOpposingTarget(err, slopePerSec))
+            {
+                st.PrevErr = err;
+                st.PrevUt = ut;
+                traceLog?.Invoke($"AUTO CTRL CH{channel} safety=SLOPE_BLOCK skipWrite UT={utFmt(ut)} err={err:F4} slope={slopePerSec:E3}C/s");
+                return currentOffset;
+            }
 
             UpdateStallAggressiveness(now, absErr, st);
             UpdateWrongTrendGuard(absErr, st);
@@ -388,7 +435,19 @@ namespace ThermoBathCalibrator.Controller
             st.PwmOffsetLow = Math.Min(currentOffset, neighbor);
             st.PwmOffsetHigh = Math.Max(currentOffset, neighbor);
 
-            double dutyHigh = 0.5 + (-err * _cfg.FinePwmDutyGainPerError);
+            // dutyHigh is for higher offset (cooling side). Keep sign mapping explicit.
+            double dutyHigh = 0.5;
+            if (err < 0.0)
+            {
+                // UT above target -> need cooling -> spend more time on high offset.
+                dutyHigh = 0.5 + (Math.Abs(err) * _cfg.FinePwmDutyGainPerError);
+            }
+            else if (err > 0.0)
+            {
+                // UT below target -> need heating -> spend less time on high offset.
+                dutyHigh = 0.5 - (Math.Abs(err) * _cfg.FinePwmDutyGainPerError);
+            }
+
             dutyHigh = OffsetMath.Clamp(dutyHigh, _cfg.FinePwmMinDutyHigh, _cfg.FinePwmMaxDutyHigh);
             st.PwmDutyHigh = dutyHigh;
 
@@ -429,6 +488,105 @@ namespace ThermoBathCalibrator.Controller
             st.LastWrite = now;
             st.LastDeltaApplied = targetOffset - currentOffset;
             return targetOffset;
+        }
+
+        private bool UpdateDivergenceGuard(
+           int channel,
+           DateTime now,
+           double err,
+           double dUt,
+           double currentOffset,
+           ChannelState st,
+           Func<int, double, string, bool> tryWriteOffset,
+           Action<string>? traceLog)
+        {
+            if (double.IsNaN(st.PrevErr) || double.IsNaN(dUt))
+            {
+                st.DivergenceStreak = 0;
+                return false;
+            }
+
+            bool errorWorsening = Math.Abs(err) > Math.Abs(st.PrevErr) + _cfg.WorsenEpsilon;
+            bool slopeAway = IsSlopeOpposingTarget(err, dUt);
+
+            if (errorWorsening && slopeAway)
+                st.DivergenceStreak++;
+            else
+                st.DivergenceStreak = 0;
+
+            if (st.DivergenceStreak < _cfg.DivergenceTriggerSamples)
+                return false;
+
+            double safeOffset = st.HasLastCommanded ? st.LastCommandedOffset : currentOffset;
+            safeOffset = OffsetMath.Clamp(safeOffset, _cfg.OffsetClampMin, _cfg.OffsetClampMax);
+            safeOffset = OffsetMath.Quantize(safeOffset, _cfg.OffsetStep);
+
+            bool wrote = false;
+            if (Math.Abs(safeOffset - currentOffset) > 1e-9 && (now - st.LastWrite).TotalSeconds >= _cfg.MinAutoWriteIntervalSeconds)
+            {
+                wrote = tryWriteOffset(channel, safeOffset, $"AUTO_SAFETY_DIVERGENCE_ROLLBACK_CH{channel}");
+                if (wrote)
+                {
+                    st.LastWrite = now;
+                    st.LastAdjust = now;
+                    st.LastDeltaApplied = safeOffset - currentOffset;
+                    st.LastCommandedOffset = safeOffset;
+                    st.LastCommandedAbsErr = Math.Abs(err);
+                }
+            }
+
+            st.FreezeUntil = now.AddSeconds(_cfg.RollbackFreezeSeconds);
+            st.DivergenceStreak = 0;
+
+            traceLog?.Invoke($"AUTO CTRL CH{channel} safety=DIVERGENCE freeze={_cfg.RollbackFreezeSeconds:F1}s rollback={safeOffset:F3} wrote={wrote} err={err:F4} prevErr={st.PrevErr:F4} dUT={dUtFmt(dUt)}");
+            return true;
+        }
+
+        private double ComputeWindowSlopePerSec(ChannelState st, DateTime now, double ut)
+        {
+            // 1) 샘플 push
+            st.UtHist.Enqueue((now, ut));
+
+            // 2) 오래된 샘플 정리(메모리/노이즈 방지)
+            var maxAge = TimeSpan.FromSeconds(_cfg.SlopeSampleMaxAgeSeconds);
+            while (st.UtHist.Count > 0 && (now - st.UtHist.Peek().t) > maxAge)
+                st.UtHist.Dequeue();
+
+            // 3) 윈도우 안에 있는 샘플만 남기기
+            var win = TimeSpan.FromSeconds(_cfg.SlopeWindowSeconds);
+            while (st.UtHist.Count > 0 && (now - st.UtHist.Peek().t) > win)
+                st.UtHist.Dequeue();
+
+            if (st.UtHist.Count < _cfg.SlopeMinSamples)
+                return double.NaN;
+
+            var first = st.UtHist.Peek();
+            var last = st.UtHist.Last(); // using System.Linq;
+
+            var dt = (last.t - first.t).TotalSeconds;
+            if (dt <= 0.0) return double.NaN;
+
+            return (last.ut - first.ut) / dt; // °C / sec
+        }
+
+
+        private bool IsSlopeOpposingTarget(double err, double slopePerSec)
+        {
+            if (double.IsNaN(slopePerSec))
+                return false; // 정보 부족이면 막지 말고 진행(오탐 방지)
+
+            // err = target - UT
+            // err > 0: UT가 낮다 -> 가열 필요 -> UT는 "올라가야 정상" (slope > 0)
+            // err < 0: UT가 높다 -> 냉각 필요 -> UT는 "내려가야 정상" (slope < 0)
+
+            if (err > 0.0)
+                return slopePerSec <= -_cfg.SlopeWrongDirectionEpsilon; // 내려가면(반대) block
+
+            if (err < 0.0)
+                return slopePerSec >= _cfg.SlopeWrongDirectionEpsilon;  // 올라가면(반대) block
+
+            // err == 0 근처: 거의 정답이면 너무 민감하게 막지 말자
+            return Math.Abs(slopePerSec) > _cfg.SlopeTowardsTargetEpsilon;
         }
 
         private void UpdateWrongTrendGuard(double absErr, ChannelState st)
