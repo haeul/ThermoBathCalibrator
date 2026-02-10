@@ -17,10 +17,14 @@ namespace ThermoBathCalibrator
                 {
                     SampleRow row = LoopOnceCore();
 
+                    // CSV는 항상 남김 (통신 실패도 기록해야 나중에 원인분석 가능)
+                    AppendCsvRow(row);
+
                     if (ShouldSkipRow(row))
                     {
                         BeginInvoke(new Action(() =>
                         {
+                            UpdateOffsetUiFromState();
                             UpdateStatusLabels();
                         }));
                     }
@@ -30,19 +34,18 @@ namespace ThermoBathCalibrator
                         {
                             AppendRowToGrid(row);
                             AppendRowToHistory(row);
-
                             UpdateTopNumbers(row.UtCh1, row.UtCh2);
-
+                            UpdateOffsetUiFromState();
                             UpdateStatusLabels();
                             pnlCh1Graph.Invalidate();
                             pnlCh2Graph.Invalidate();
                         }));
-
-                        AppendCsvRow(row);
                     }
+
                 }
-                catch
+                catch (Exception ex)
                 {
+                    System.Diagnostics.Debug.WriteLine(ex.ToString());
                 }
 
                 int sleepMs = 1000 - (int)(DateTime.Now - started).TotalMilliseconds;
@@ -87,6 +90,7 @@ namespace ThermoBathCalibrator
             double bath1Pv = readOk ? snap.Ch1Pv : double.NaN;
             double bath2Pv = readOk ? snap.Ch2Pv : double.NaN;
 
+            // ===== read-back 기반 cur 갱신(정본) =====
             if (readOk)
             {
                 lock (_offsetStateSync)
@@ -129,43 +133,50 @@ namespace ThermoBathCalibrator
                 currentOffset2 = _bath2OffsetCur;
             }
 
-            double appliedToSend1 = currentOffset1;
-            double appliedToSend2 = currentOffset2;
-            double next1 = _autoCtrl.UpdateAndMaybeWrite(
-                channel: 1,
-                now: now,
-                readOk: readOk,
-                ut: utCh1,
-                err: err1,
-                currentOffset: currentOffset1,
-                tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
-                traceLog: TraceModbus
-            );
+            // ===== 체크박스로 "쓰기/보정" 기능 완전 차단 =====
+            bool enableControl = _enableOffsetControl;
 
-            //if (Math.Abs(next1 - currentOffset1) > 1e-9)
-            //{
-            //    lock (_offsetStateSync) { _bath1OffsetCur = next1; }
-            //    _lastWriteCh1 = now;
-            //}
-            appliedToSend1 = next1;
+            double next1 = currentOffset1;
+            double next2 = currentOffset2;
 
-            double next2 = _autoCtrl.UpdateAndMaybeWrite(
-                channel: 2,
-                now: now,
-                readOk: readOk,
-                ut: utCh2,
-                err: err2,
-                currentOffset: currentOffset2,
-                tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
-                traceLog: TraceModbus
-            );
+            if (enableControl)
+            {
+                // ON: 자동 제어 계산 + 필요 시 write(FC10) 가능
+                next1 = _autoCtrl.UpdateAndMaybeWrite(
+                    channel: 1,
+                    now: now,
+                    readOk: readOk,
+                    ut: utCh1,
+                    err: err1,
+                    currentOffset: currentOffset1,
+                    tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
+                    traceLog: TraceModbus
+                );
 
-            //if (Math.Abs(next2 - currentOffset2) > 1e-9)
-            //{
-            //    lock (_offsetStateSync) { _bath2OffsetCur = next2; }
-            //    _lastWriteCh2 = now;
-            //}
-            appliedToSend2 = next2;
+                next2 = _autoCtrl.UpdateAndMaybeWrite(
+                    channel: 2,
+                    now: now,
+                    readOk: readOk,
+                    ut: utCh2,
+                    err: err2,
+                    currentOffset: currentOffset2,
+                    tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
+                    traceLog: TraceModbus
+                );
+            }
+            else
+            {
+                // OFF: 모니터링/수집만. 절대 write 호출 금지.
+                // next는 "명령값" 의미가 없으니 현재 offset을 그대로 기록.
+                TraceModbus("OFFSET CONTROL DISABLED -> monitoring only (no FC10 write)");
+                next1 = currentOffset1;
+                next2 = currentOffset2;
+            }
+
+            // ===== cur는 read-back만 정본 =====
+            // (중요) 기존 코드에 있던 아래 블록은 제거:
+            // if (Math.Abs(next - current) > ...) { _bathOffsetCur = next; _lastWrite = now; }
+            // -> 이건 cur을 요청값(next)으로 오염시키는 동작임.
 
             double finalOffset1;
             double finalOffset2;
@@ -177,6 +188,7 @@ namespace ThermoBathCalibrator
 
             double bath1SetTemp = (!double.IsNaN(finalOffset1)) ? _bath1Setpoint + finalOffset1 : double.NaN;
             double bath2SetTemp = (!double.IsNaN(finalOffset2)) ? _bath2Setpoint + finalOffset2 : double.NaN;
+
             _ = stale;
 
             return new SampleRow
@@ -193,6 +205,7 @@ namespace ThermoBathCalibrator
                 Err1 = err1,
                 Err2 = err2,
 
+                // cur = 장비 read-back(정본)
                 Bath1OffsetCur = finalOffset1,
                 Bath2OffsetCur = finalOffset2,
 
@@ -214,8 +227,9 @@ namespace ThermoBathCalibrator
                 Bath1OffsetTarget = double.NaN,
                 Bath2OffsetTarget = double.NaN,
 
-                Bath1OffsetApplied = appliedToSend1,
-                Bath2OffsetApplied = appliedToSend2,
+                // applied = 이번 tick에서 "계산/명령한 값(next)" (체크 OFF면 current와 동일)
+                Bath1OffsetApplied = next1,
+                Bath2OffsetApplied = next2,
 
                 Bath1SetTemp = bath1SetTemp,
                 Bath2SetTemp = bath2SetTemp

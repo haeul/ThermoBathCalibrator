@@ -330,15 +330,26 @@ namespace ThermoBathCalibrator
                 bool ok = TryWriteAndWaitAck(channel: 1, cmd: cmd, svWord: svWord, offsetWord: offsetWord, reason: reason, desiredOffset: appliedOffset, raw10: raw10, out string errWriteAndAck);
                 if (ok)
                 {
-                    lock (_offsetStateSync)
+                    if (TryReadbackAfterWrite(channel: 1, desiredOffset: appliedOffset, out double readback))
                     {
-                        _bath1OffsetCur = appliedOffset;
+                        lock (_offsetStateSync)
+                        {
+                            _bath1OffsetCur = readback;
+                        }
+                        _lastWrittenOffsetCh1 = readback;
                     }
-                    _lastWrittenOffsetCh1 = appliedOffset;
+                    else
+                    {
+                        _lastWrittenOffsetCh1 = appliedOffset;
+                    }
+
                     _lastWriteCh1 = DateTime.Now;
                     BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
                 }
-                else TraceModbus($"OFFSET WRITE FAIL ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
+                else
+                {
+                    TraceModbus($"OFFSET WRITE FAIL ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
+                }
                 return ok;
             }
 
@@ -353,15 +364,26 @@ namespace ThermoBathCalibrator
                 bool ok = TryWriteAndWaitAck(channel: 2, cmd: cmd, svWord: svWord, offsetWord: offsetWord, reason: reason, desiredOffset: appliedOffset, raw10: raw10, out string errWriteAndAck);
                 if (ok)
                 {
-                    lock (_offsetStateSync)
+                    if (TryReadbackAfterWrite(channel: 2, desiredOffset: appliedOffset, out double readback))
                     {
-                        _bath2OffsetCur = appliedOffset;
+                        lock (_offsetStateSync)
+                        {
+                            _bath2OffsetCur = readback;
+                        }
+                        _lastWrittenOffsetCh2 = readback;
                     }
-                    _lastWrittenOffsetCh2 = appliedOffset;
+                    else
+                    {
+                        _lastWrittenOffsetCh2 = appliedOffset;
+                    }
+
                     _lastWriteCh2 = DateTime.Now;
                     BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
                 }
-                else TraceModbus($"OFFSET WRITE FAIL ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
+                else
+                {
+                    TraceModbus($"OFFSET WRITE FAIL ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
+                }
                 return ok;
             }
 
@@ -374,6 +396,14 @@ namespace ThermoBathCalibrator
 
             ushort start = channel == 1 ? RegCh1Command : RegCh2Command;
             ushort[] payload = new ushort[] { cmd, svWord, offsetWord };
+
+            // ✅ 중요: clear는 "command만 0"으로 내리고, SV/Offset은 유지(0,0,0 금지)
+            _ = TryClearCommandWord(channel, svWord, offsetWord, reason: reason);
+
+            ushort beforeResp = 0;
+            bool hasBeforeResp = TryReadResponseRegister(channel, out beforeResp, out string errBeforeResp);
+            if (!hasBeforeResp)
+                TraceModbus($"ACK PRE-READ FAIL ch={channel} reason={reason} err={errBeforeResp}");
 
             if (!_mb.TryWriteMultipleRegisters(start, payload, out string errWrite))
             {
@@ -393,11 +423,17 @@ namespace ThermoBathCalibrator
             {
                 if (TryReadResponseRegister(channel, out ushort resp, out string errResp))
                 {
-                    if ((resp & ackMask) == ackMask)
+                    bool ackSet = (resp & ackMask) == ackMask;
+                    bool staleAck = hasBeforeResp && ((beforeResp & ackMask) == ackMask) && resp == beforeResp;
+
+                    if (ackSet && !staleAck)
                     {
                         TraceModbus($"OFFSET WRITE OK ch={channel} reason={reason} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} ackResp=0x{resp:X4} ackMask=0x{ackMask:X4}");
                         return true;
                     }
+
+                    if (staleAck)
+                        TraceModbus($"OFFSET WRITE ACK STALE ch={channel} reason={reason} before=0x{beforeResp:X4} now=0x{resp:X4} ackMask=0x{ackMask:X4}");
                 }
                 else
                 {
@@ -409,6 +445,51 @@ namespace ThermoBathCalibrator
 
             error = $"ACK TIMEOUT ch={channel} reason={reason} mask=0x{ackMask:X4}";
             TraceModbus(error);
+            return false;
+        }
+
+        // ✅ 수정본: 0,0,0 금지. Command만 0으로 내리고 SV/Offset은 유지.
+        private bool TryClearCommandWord(int channel, ushort svWord, ushort offsetWord, string reason)
+        {
+            ushort start = channel == 1 ? RegCh1Command : RegCh2Command;
+
+            // command=0, sv/offset 유지 (장비가 파라미터를 레벨로 읽는 경우도 안전)
+            ushort[] clearPayload = new ushort[] { 0, svWord, offsetWord };
+
+            bool ok = _mb.TryWriteMultipleRegisters(start, clearPayload, out string errClear);
+            if (!ok)
+            {
+                TraceModbus($"OFFSET CMD CLEAR FAIL ch={channel} reason={reason} start={start} err={errClear}");
+                return false;
+            }
+
+            TraceModbus($"OFFSET CMD CLEAR OK ch={channel} reason={reason} start={start} keepSV=0x{svWord:X4} keepOFF=0x{offsetWord:X4}");
+            return true;
+        }
+
+        private bool TryReadbackAfterWrite(int channel, double desiredOffset, out double readback)
+        {
+            readback = double.NaN;
+            DateTime begin = DateTime.UtcNow;
+
+            while ((DateTime.UtcNow - begin).TotalMilliseconds < AckTimeoutMs)
+            {
+                if (TryReadOffsetFromDevice(channel, out readback))
+                {
+                    double diff = Math.Abs(readback - desiredOffset);
+                    if (diff <= OffsetReadbackMismatchEpsilon)
+                    {
+                        TraceModbus($"OFFSET WRITE VERIFY OK ch={channel} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} read={readback.ToString("0.0", CultureInfo.InvariantCulture)} diff={diff.ToString("0.000", CultureInfo.InvariantCulture)}");
+                        return true;
+                    }
+
+                    TraceModbus($"OFFSET WRITE VERIFY WAIT ch={channel} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} read={readback.ToString("0.0", CultureInfo.InvariantCulture)} diff={diff.ToString("0.000", CultureInfo.InvariantCulture)}");
+                }
+
+                Thread.Sleep(AckPollIntervalMs);
+            }
+
+            TraceModbus($"OFFSET WRITE VERIFY TIMEOUT ch={channel} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} read={readback.ToString("0.0", CultureInfo.InvariantCulture)}");
             return false;
         }
 

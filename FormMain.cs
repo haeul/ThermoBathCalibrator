@@ -8,6 +8,11 @@ namespace ThermoBathCalibrator
 {
     public partial class FormMain : Form
     {
+        // =============================
+        // Offset control enable flag
+        // =============================
+        private volatile bool _enableOffsetControl = false;
+
         public FormMain()
         {
             InitializeComponent();
@@ -21,6 +26,11 @@ namespace ThermoBathCalibrator
             btnOffsetApplyCh2.Click += BtnOffsetApplyCh2_Click;
 
             btnComSetting.Click += BtnComSetting_Click;
+
+            // NEW: offset control checkbox
+            chkEnableOffsetControl.CheckedChanged += ChkEnableOffsetControl_CheckedChanged;
+            chkEnableOffsetControl.Checked = false; // 기본 OFF (안전)
+            _enableOffsetControl = chkEnableOffsetControl.Checked;
 
             nudOffsetCh1.DecimalPlaces = 1;
             nudOffsetCh1.Increment = 0.1M;
@@ -51,6 +61,32 @@ namespace ThermoBathCalibrator
             UpdateOffsetUiFromState();
 
             PrepareCsvPath(DateTime.Now);
+
+            // 체크박스 상태에 따라 UI 잠금 반영
+            ApplyOffsetControlUiLock();
+        }
+
+        // =============================
+        // NEW: checkbox event
+        // =============================
+        private void ChkEnableOffsetControl_CheckedChanged(object sender, EventArgs e)
+        {
+            _enableOffsetControl = chkEnableOffsetControl.Checked;
+            ApplyOffsetControlUiLock();
+        }
+
+        private void ApplyOffsetControlUiLock()
+        {
+            bool on = _enableOffsetControl;
+
+            // 수동 조작 UI도 같이 잠그기
+            btnOffsetApplyCh1.Enabled = on;
+            btnOffsetApplyCh2.Enabled = on;
+            nudOffsetCh1.Enabled = on;
+            nudOffsetCh2.Enabled = on;
+
+            // (선택) 화면에서 현재 모드 표시를 하고 싶으면 라벨 색/텍스트 변경도 가능
+            // 예: chkEnableOffsetControl.ForeColor = on ? Color.DarkGreen : Color.DarkRed;
         }
 
         private void BtnStart_Click(object sender, EventArgs e)
@@ -59,18 +95,29 @@ namespace ThermoBathCalibrator
 
             PrepareCsvPath(DateTime.Now);
 
-            // 버전2 동기화 플로우: Start 직전 read-back을 필수 게이트로 둔다.
-            if (!TrySyncOffsetsFromDevice(reason: "START_BUTTON"))
+            bool enableControl = _enableOffsetControl;
+
+            if (enableControl)
             {
-                MessageBox.Show(
-                    "장비 offset read-back 실패로 자동 제어를 시작하지 않습니다. 통신 상태를 확인해 주세요.",
-                    "Offset Sync Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
-                UpdateStatusLabels();
-                UpdateOffsetUiFromState();
-                return;
+                // 보정 모드: Start 직전 read-back을 "필수 게이트"
+                if (!TrySyncOffsetsFromDevice(reason: "START_BUTTON"))
+                {
+                    MessageBox.Show(
+                        "장비 offset read-back 실패로 Offset 보정(쓰기) 모드를 시작하지 않습니다.\r\n" +
+                        "통신 상태를 확인하거나, 체크박스를 끄고(모니터링만) Start 하세요.",
+                        "Offset Sync Error",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                    UpdateStatusLabels();
+                    UpdateOffsetUiFromState();
+                    return;
+                }
+            }
+            else
+            {
+                // 모니터링 모드: 동기화 best-effort (실패해도 시작 허용)
+                _ = TrySyncOffsetsFromDevice(reason: "START_BUTTON_MONITOR_ONLY");
             }
 
             // 동기화된 내부 상태를 UI에 확실히 반영
@@ -103,12 +150,22 @@ namespace ThermoBathCalibrator
 
         private void BtnOffsetApplyCh1_Click(object sender, EventArgs e)
         {
+            if (!_enableOffsetControl)
+            {
+                MessageBox.Show(
+                    "Offset 보정(쓰기) 기능이 꺼져 있습니다.\r\n체크박스를 켠 뒤 다시 시도하세요.",
+                    "Offset Control Disabled",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
+                return;
+            }
+
             double offset = (double)nudOffsetCh1.Value;
 
             double applied = OffsetMath.Quantize(offset, _autoCfg.OffsetStep);
             applied = OffsetMath.Clamp(applied, _autoCfg.OffsetClampMin, _autoCfg.OffsetClampMax);
 
-            // 버전2: write 성공 직후 내부 상태 즉시 반영은 TryWriteChannelOffset 내부에서 수행된다고 가정
             bool ok = TryWriteChannelOffset(channel: 1, appliedOffset: applied, reason: "MANUAL_APPLY_CH1");
             if (ok)
             {
@@ -121,6 +178,17 @@ namespace ThermoBathCalibrator
 
         private void BtnOffsetApplyCh2_Click(object sender, EventArgs e)
         {
+            if (!_enableOffsetControl)
+            {
+                MessageBox.Show(
+                    "Offset 보정(쓰기) 기능이 꺼져 있습니다.\r\n체크박스를 켠 뒤 다시 시도하세요.",
+                    "Offset Control Disabled",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
+                return;
+            }
+
             double offset = (double)nudOffsetCh2.Value;
 
             double applied = OffsetMath.Quantize(offset, _autoCfg.OffsetStep);
@@ -222,5 +290,18 @@ namespace ThermoBathCalibrator
 
             lblThermoPortStatus.ForeColor = _boardConnected ? Color.LimeGreen : Color.OrangeRed;
         }
+
+        // ===========================================================
+        // IMPORTANT: LoopOnceCore() 내부에서 "자동 write" 분기 필요
+        // ===========================================================
+        //
+        // 네가 이미 가진 LoopOnceCore() 코드에서,
+        // 아래와 같은 형태로 "enableControl=false면 UpdateAndMaybeWrite 호출 자체를 스킵"해야 함.
+        //
+        //  bool enableControl = _enableOffsetControl;
+        //  if (enableControl) { next1 = _autoCtrl.UpdateAndMaybeWrite(... tryWriteOffset: TryWriteChannelOffset ...); }
+        //  else { next1 = currentOffset1; TraceModbus("OFFSET CONTROL DISABLED -> monitoring only (no FC10 write)"); }
+        //
+        // 이 분기만 들어가면 "Start 모니터링 모드"에서 절대 FC10 write가 나가지 않는다.
     }
 }
