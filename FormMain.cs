@@ -13,6 +13,11 @@ namespace ThermoBathCalibrator
 {
     public partial class FormMain : Form
     {
+        // ===== UT-ONE 측정 보정(업체 기준 온도계 대비 오프셋) =====
+        // UT-ONE이 0.3도 높게 나오면 +0.3으로 두고, 계산 시 ut에서 빼준다.
+        private double _utBiasCh1 = 0.14;
+        private double _utBiasCh2 = 0.3;
+
         private double _bath1Setpoint = 25.0;
         private double _bath2Setpoint = 25.0;
 
@@ -22,8 +27,23 @@ namespace ThermoBathCalibrator
 
         private bool _running;
 
+        // 단순 offset 제어용
+        // ===== 단순 offset 제어용 =====
+        private DateTime _lastSimpleAdjustCh1 = DateTime.MinValue;
+        private DateTime _lastSimpleAdjustCh2 = DateTime.MinValue;
+
+        private const double TargetTemp = 25.000;
+        private const double SimpleStep = 0.1;
+        private const double SimpleHoldSeconds = 20.0; // 물 반응 기다리는 시간
+
+
+        // ===== 모니터링 그래프: 최근 5분 "시간 기반" 윈도우로 흘러가게 표시 =====
+        // - 기존 MaxPoints=300(1초 주기면 5분)이지만, 통신 누락/지연이 있어도
+        //   "시간 기준 5분" 윈도우가 유지되도록 시간으로 컷합니다.
         private const int MaxPoints = 300;
         private readonly List<SampleRow> _history = new List<SampleRow>(MaxPoints);
+
+        private static readonly TimeSpan GraphWindow = TimeSpan.FromMinutes(5);
 
         private double _bath1OffsetCur;
         private double _bath2OffsetCur;
@@ -50,15 +70,27 @@ namespace ThermoBathCalibrator
         private long _lastReconnectTick;
         private const int ReconnectCooldownMs = 800;
 
-        // 제어 안정화 상태
+        // 채널별 UT 홀드 기준값
+        private double _utAtHoldStartCh1 = double.NaN;
+        private double _utAtHoldStartCh2 = double.NaN;
+
+        // ===== 제어 상태(채널별) =====
+        // iTerm은 "offset에 더해지는 누적 보정값"으로 사용
         private double _iTerm1 = 0.0;
         private double _iTerm2 = 0.0;
 
+        // prevErr는 로그(derr) 계산용
         private double _prevErr1 = double.NaN;
         private double _prevErr2 = double.NaN;
 
         private DateTime _lastWriteCh1 = DateTime.MinValue;
         private DateTime _lastWriteCh2 = DateTime.MinValue;
+
+        // ===== "변경 후 유지(stickiness)"를 위한 채널별 홀드 타임 =====
+        // - 문제: 0.5를 1틱만 찍고 바로 0.4로 내려오는 현상
+        // - 해결: 한번 offset을 바꿨으면 일정 시간은 되돌리지 않도록 "hold until"을 둔다
+        private DateTime _holdUntilCh1 = DateTime.MinValue;
+        private DateTime _holdUntilCh2 = DateTime.MinValue;
 
         // 워커 스레드(통신/로깅)
         private Thread? _workerThread;
@@ -93,6 +125,65 @@ namespace ThermoBathCalibrator
         private const int AckTimeoutMs = 1500;
         private const int AckPollIntervalMs = 100;
         private const int AckInitialDelayMs = 120;
+
+        // =====================================================================================
+        // Offset 제어 튜닝(중요: CH1/CH2 완전 분리)
+        // - 목표: UT(보정 후)가 SP(=25.0)에 수렴하도록 offset을 조절
+        // - 장비 특성: offset을 올리면(+) 항온조 온도는 내려간다(역방향)
+        //   * UT가 낮다(UT<SP, err>0) => 온도 올려야 함 => offset을 내려야 함(감소)
+        //   * UT가 높다(UT>SP, err<0) => 온도 내려야 함 => offset을 올려야 함(증가)
+        // - 그래서 기본 관계: deltaOffset = -Kp * err  (err = SP - UT)
+        //
+        // ★ 추가 적용(이번 수정의 핵심)
+        // 1) "시간 기반 stickiness": 한번 바꾼 offset은 최소 N초 유지 (0.5 1틱 문제 해결)
+        // 2) "미세 오차 구간 pulse": deadband 밖인데도 변화가 멈추면 0.1을 일정 시간 "유지"하며 밀어준다
+        // =====================================================================================
+        private sealed class OffsetTuning
+        {
+            // ===== 오차 해석 =====
+            // error = SP - UT(보정 후)
+            // error > 0 : UT가 낮음 => 가열 필요 => offset 감소 방향
+            // error < 0 : UT가 높음 => 냉각 필요 => offset 증가 방향
+
+            // deadband를 과하게 크게 두면(CH2처럼 -0.019) 영원히 0으로 고정될 수 있음
+            public double Deadband = 0.001;
+
+            // 적분: 0.1 step 장비에서는 "천천히 쌓여서 한 칸을 만들어" 끝까지 붙이기 용도
+            public double Ki = 0.02;
+            public double IClamp = 0.30;
+
+            // 오차 크기별 Kp(큰 오차: 과감 / 작은 오차: 조심)
+            public double KpSmall = 0.40;    // |err| < MidErr
+            public double KpMid = 0.80;      // MidErr <= |err| < LargeErr
+            public double KpLarge = 1.60;    // |err| >= LargeErr
+            public double MidErr = 0.20;
+            public double LargeErr = 0.50;
+
+            // 쓰기 정책(채널별)
+            public double MaxDeltaPerWrite = 0.10; // 1회 적용 최대 변화량(0.1 step 장비 기준)
+            public double MinChangeToWrite = 0.10; // 0.1 step 장비면 사실상 0.1 이상만 의미 있음
+
+            // "쓰기 간격 제한"이 아니라 "바뀐 값을 유지"하는 데 더 의미가 있음.
+            // (여기 값은 "쓰기 가능 최소 간격"으로도 쓰지만, 본질은 stickiness로 보호됨)
+            public double HoldSecondsLarge = 2.0;
+            public double HoldSecondsMid = 3.0;
+            public double HoldSecondsSmall = 10.0;
+
+            // ===== stickiness: 한번 변경되면 최소 유지 시간 =====
+            public double MinHoldAfterAnyWriteSeconds = 10.0; // 핵심: 0.5를 1틱만 찍고 내려오는 것 방지
+
+            // ===== 미세오차 pulse 모드 =====
+            // - absErr가 Deadband 보다 크지만 "너무 작아서 P/I로는 0.1 step을 못 넘는" 구간에서
+            //   0.1을 "한 번" 주고, 충분히 유지하면서 변화가 있는지 본다.
+            public double PulseErrMin = 0.01;          // 이 이상에서만 펄스 고려
+            public double PulseErrMax = 0.15;          // 이 이하(미세 오차)에서는 펄스가 효과적
+            public double PulseHoldSeconds = 15.0;     // 펄스 적용 후 유지 시간(효과 관측 시간)
+        }
+
+        // 초기값은 동일하게 두되, 현장에서 CH1/CH2 다르게 튜닝 가능
+        private readonly OffsetTuning _tunCh1 = new OffsetTuning { };
+        private readonly OffsetTuning _tunCh2 = new OffsetTuning { };
+
         public FormMain()
         {
             InitializeComponent();
@@ -181,6 +272,9 @@ namespace ThermoBathCalibrator
             _lastWriteCh1 = DateTime.MinValue;
             _lastWriteCh2 = DateTime.MinValue;
 
+            _holdUntilCh1 = DateTime.MinValue;
+            _holdUntilCh2 = DateTime.MinValue;
+
             _hasLastGoodSnap = false;
             _lastGoodSnap = default;
 
@@ -265,6 +359,7 @@ namespace ThermoBathCalibrator
 
         private void BtnOffsetApply_Click(object sender, EventArgs e)
         {
+            // 수동 적용: CH1/CH2 모두 동일 값으로 쓰는 동작(원하면 채널별 UI로 분리 가능)
             double offset = (double)nudOffSet.Value;
             double applied = QuantizeOffset(offset, step: OffsetStep);
 
@@ -275,12 +370,19 @@ namespace ThermoBathCalibrator
             {
                 _bath1OffsetCur = applied;
                 _lastWriteCh1 = DateTime.Now;
+
+                // 수동으로도 바꿨으면, 즉시 되돌아가지 않게 유지시간을 건다
+                var t = _tunCh1;
+                _holdUntilCh1 = DateTime.Now.AddSeconds(t.MinHoldAfterAnyWriteSeconds);
             }
 
             if (ok2)
             {
                 _bath2OffsetCur = applied;
                 _lastWriteCh2 = DateTime.Now;
+
+                var t = _tunCh2;
+                _holdUntilCh2 = DateTime.Now.AddSeconds(t.MinHoldAfterAnyWriteSeconds);
             }
 
             lblOffsetValue.Text = applied.ToString("0.0", CultureInfo.InvariantCulture);
@@ -304,7 +406,6 @@ namespace ThermoBathCalibrator
                     // 기준: Bath1Pv, Bath2Pv, UtCh1, UtCh2 모두 값이 없거나( NaN ) / 0이면 기록하지 않음
                     if (ShouldSkipRow(row))
                     {
-                        // 상태 라벨 정도는 갱신(통신 끊김/복구 표시용)
                         BeginInvoke(new Action(() =>
                         {
                             UpdateStatusLabels();
@@ -346,7 +447,6 @@ namespace ThermoBathCalibrator
 
         private static bool ShouldSkipRow(SampleRow r)
         {
-            // 핵심 4개(요청 기준): bath1_pv, bath2_pv, ut_ch1, ut_ch2
             bool allMissing =
                 IsMissingOrZero(r.Bath1Pv) &&
                 IsMissingOrZero(r.Bath2Pv) &&
@@ -364,8 +464,12 @@ namespace ThermoBathCalibrator
 
             bool readOk = TryReadMultiBoard(out MultiBoardSnapshot snap, out bool stale);
 
-            double utCh1 = readOk ? snap.Ch1ExternalThermo : double.NaN;
-            double utCh2 = readOk ? snap.Ch2ExternalThermo : double.NaN;
+            double utCh1Raw = readOk ? snap.Ch1ExternalThermo : double.NaN;
+            double utCh2Raw = readOk ? snap.Ch2ExternalThermo : double.NaN;
+
+            // ===== UT 보정(반드시 유지) =====
+            double utCh1 = double.IsNaN(utCh1Raw) ? double.NaN : (utCh1Raw - _utBiasCh1);
+            double utCh2 = double.IsNaN(utCh2Raw) ? double.NaN : (utCh2Raw - _utBiasCh2);
             double utTj = readOk ? snap.Tj : double.NaN;
 
             double bath1Pv = readOk ? snap.Ch1Pv : double.NaN;
@@ -377,11 +481,21 @@ namespace ThermoBathCalibrator
                 _bath2OffsetCur = snap.Ch2OffsetCur;
             }
 
-            double err1 = (!double.IsNaN(utCh1) && !double.IsNaN(bath1Pv)) ? (utCh1 - bath1Pv) : double.NaN;
-            double err2 = (!double.IsNaN(utCh2) && !double.IsNaN(bath2Pv)) ? (utCh2 - bath2Pv) : double.NaN;
+            // =================================================================================
+            // 핵심: 목표는 "UT(보정 후)가 25.000에 수렴" (SV=25 고정 + offset으로 조절)
+            // err = SP - UT
+            //  - err > 0 : UT가 낮음 => 온도를 올려야 함 => offset을 내려야 함
+            //  - err < 0 : UT가 높음 => 온도를 내려야 함 => offset을 올려야 함
+            // =================================================================================
+            double err1 = (!double.IsNaN(utCh1)) ? (_bath1Setpoint - utCh1) : double.NaN;
+            double err2 = (!double.IsNaN(utCh2)) ? (_bath2Setpoint - utCh2) : double.NaN;
 
             double derr1 = (!double.IsNaN(err1) && !double.IsNaN(_prevErr1)) ? (err1 - _prevErr1) : double.NaN;
             double derr2 = (!double.IsNaN(err2) && !double.IsNaN(_prevErr2)) ? (err2 - _prevErr2) : double.NaN;
+
+            // prevErr 업데이트(로그용)
+            _prevErr1 = err1;
+            _prevErr2 = err2;
 
             double err1Ma5 = MovingAverageWithCurrent(_history.Select(h => h.Err1), current: err1, window: 5);
             double err2Ma5 = MovingAverageWithCurrent(_history.Select(h => h.Err2), current: err2, window: 5);
@@ -392,70 +506,173 @@ namespace ThermoBathCalibrator
             double lastWriteAgeCh1Sec = (_lastWriteCh1 == DateTime.MinValue) ? double.NaN : (now - _lastWriteCh1).TotalSeconds;
             double lastWriteAgeCh2Sec = (_lastWriteCh2 == DateTime.MinValue) ? double.NaN : (now - _lastWriteCh2).TotalSeconds;
 
-            double target1 = (!double.IsNaN(err1)) ? CalculateOffsetTarget(channel: 1, error: err1) : double.NaN;
-            double target2 = (!double.IsNaN(err2)) ? CalculateOffsetTarget(channel: 2, error: err2) : double.NaN;
+            // 목표 offset(절대값) 계산: "현재 offset + (P증분 + I누적)" 기반
+            double target1 = (!double.IsNaN(err1)) ? CalculateOffsetTarget(channel: 1, now: now, error: err1) : double.NaN;
+            double target2 = (!double.IsNaN(err2)) ? CalculateOffsetTarget(channel: 2, now: now, error: err2) : double.NaN;
 
             double desiredApplied1 = (!double.IsNaN(target1)) ? QuantizeOffset(target1, OffsetStep) : double.NaN;
             double desiredApplied2 = (!double.IsNaN(target2)) ? QuantizeOffset(target2, OffsetStep) : double.NaN;
 
-            double appliedToSend1 = desiredApplied1;
-            double appliedToSend2 = desiredApplied2;
+            //double appliedToSend1 = desiredApplied1;
+            //double appliedToSend2 = desiredApplied2;
 
-            if (readOk && !double.IsNaN(desiredApplied1))
-            {
-                if (TryApplyOffsetWithPolicy(channel: 1, now: now, err: err1, desiredAppliedOffset: desiredApplied1, ref appliedToSend1))
-                {
-                    bool w1 = TryWriteChannelOffset(channel: 1, appliedOffset: appliedToSend1);
-                    if (w1)
-                    {
-                        _bath1OffsetCur = appliedToSend1;
-                        _lastWriteCh1 = now;
-                    }
-                    else
-                    {
-                        appliedToSend1 = _bath1OffsetCur;
-                    }
-                }
-                else
-                {
-                    appliedToSend1 = _bath1OffsetCur;
-                }
-            }
-            else
-            {
-                appliedToSend1 = _bath1OffsetCur;
-            }
+            // 기존 target/policy 기반 계산 결과가 있어도 상관없음.
+            // 우리는 아래에서 "현재 offset_cur" 기준으로 단순 step 제어만 적용한다.
+            double appliedToSend1 = _bath1OffsetCur;
+            double appliedToSend2 = _bath2OffsetCur;
 
-            if (readOk && !double.IsNaN(desiredApplied2))
+            // ===== 단순 offset 제어 (CH1) =====
+            if (readOk && !double.IsNaN(utCh1))
             {
-                if (TryApplyOffsetWithPolicy(channel: 2, now: now, err: err2, desiredAppliedOffset: desiredApplied2, ref appliedToSend2))
+                if ((now - _lastSimpleAdjustCh1).TotalSeconds >= SimpleHoldSeconds)
                 {
-                    bool w2 = TryWriteChannelOffset(channel: 2, appliedOffset: appliedToSend2);
-                    if (w2)
+                    // 목표: UT를 25.000으로
+                    if (utCh1 > 25.000 + 0.001)
                     {
-                        _bath2OffsetCur = appliedToSend2;
-                        _lastWriteCh2 = now;
+                        double next = Math.Min(_bath1OffsetCur + 0.1, OffsetClampMax);
+                        next = QuantizeOffset(next, OffsetStep); // 0.1 step 유지
+                        if (Math.Abs(next - _bath1OffsetCur) >= 0.05)
+                        {
+                            if (TryWriteChannelOffset(1, next))
+                            {
+                                _bath1OffsetCur = next;
+                                _lastWriteCh1 = now;
+                                _lastSimpleAdjustCh1 = now;
+                            }
+                        }
                     }
-                    else
+                    else if (utCh1 < 25.000 - 0.001)
                     {
-                        appliedToSend2 = _bath2OffsetCur;
+                        double next = Math.Max(_bath1OffsetCur - 0.1, OffsetClampMin);
+                        next = QuantizeOffset(next, OffsetStep);
+                        if (Math.Abs(next - _bath1OffsetCur) >= 0.05)
+                        {
+                            if (TryWriteChannelOffset(1, next))
+                            {
+                                _bath1OffsetCur = next;
+                                _lastWriteCh1 = now;
+                                _lastSimpleAdjustCh1 = now;
+                            }
+                        }
                     }
                 }
-                else
-                {
-                    appliedToSend2 = _bath2OffsetCur;
-                }
-            }
-            else
-            {
-                appliedToSend2 = _bath2OffsetCur;
             }
 
+            appliedToSend1 = _bath1OffsetCur;
+
+            // ===== 단순 offset 제어 (CH2) =====
+            if (readOk && !double.IsNaN(utCh2))
+            {
+                if ((now - _lastSimpleAdjustCh2).TotalSeconds >= SimpleHoldSeconds)
+                {
+                    if (utCh2 > 25.000 + 0.001)
+                    {
+                        double next = Math.Min(_bath2OffsetCur + 0.1, OffsetClampMax);
+                        next = QuantizeOffset(next, OffsetStep);
+                        if (Math.Abs(next - _bath2OffsetCur) >= 0.05)
+                        {
+                            if (TryWriteChannelOffset(2, next))
+                            {
+                                _bath2OffsetCur = next;
+                                _lastWriteCh2 = now;
+                                _lastSimpleAdjustCh2 = now;
+                            }
+                        }
+                    }
+                    else if (utCh2 < 25.000 - 0.001)
+                    {
+                        double next = Math.Max(_bath2OffsetCur - 0.1, OffsetClampMin);
+                        next = QuantizeOffset(next, OffsetStep);
+                        if (Math.Abs(next - _bath2OffsetCur) >= 0.05)
+                        {
+                            if (TryWriteChannelOffset(2, next))
+                            {
+                                _bath2OffsetCur = next;
+                                _lastWriteCh2 = now;
+                                _lastSimpleAdjustCh2 = now;
+                            }
+                        }
+                    }
+                }
+            }
+
+            appliedToSend2 = _bath2OffsetCur;
+
+            //// CH1 자동 적용
+            //if (readOk && !double.IsNaN(desiredApplied1))
+            //{
+            //    if (TryApplyOffsetWithPolicy(channel: 1, now: now, err: err1, desiredAppliedOffset: desiredApplied1, ref appliedToSend1))
+            //    {
+            //        bool w1 = TryWriteChannelOffset(channel: 1, appliedOffset: appliedToSend1);
+            //        if (w1)
+            //        {
+            //            _bath1OffsetCur = appliedToSend1;
+            //            _lastWriteCh1 = now;
+
+            //            // ===== 핵심: "변경 후 최소 유지" (0.5 1틱 문제 해결) =====
+            //            // - 한 번 바꿨으면 바로 되돌리지 않게 한다.
+            //            // - 미세오차 pulse를 적용한 경우는 더 길게 유지(효과 관측).
+            //            var t = _tunCh1;
+            //            double absErr = Math.Abs(err1);
+            //            bool isPulseBand = absErr >= t.PulseErrMin && absErr <= t.PulseErrMax;
+            //            double hold = isPulseBand ? Math.Max(t.PulseHoldSeconds, t.MinHoldAfterAnyWriteSeconds)
+            //                                      : t.MinHoldAfterAnyWriteSeconds;
+            //            _holdUntilCh1 = now.AddSeconds(hold);
+            //            _utAtHoldStartCh1 = utCh1;
+            //        }
+            //        else
+            //        {
+            //            appliedToSend1 = _bath1OffsetCur;
+            //        }
+            //    }
+            //    else
+            //    {
+            //        appliedToSend1 = _bath1OffsetCur;
+            //    }
+            //}
+            //else
+            //{
+            //    appliedToSend1 = _bath1OffsetCur;
+            //}
+
+            //// CH2 자동 적용
+            //if (readOk && !double.IsNaN(desiredApplied2))
+            //{
+            //    if (TryApplyOffsetWithPolicy(channel: 2, now: now, err: err2, desiredAppliedOffset: desiredApplied2, ref appliedToSend2))
+            //    {
+            //        bool w2 = TryWriteChannelOffset(channel: 2, appliedOffset: appliedToSend2);
+            //        if (w2)
+            //        {
+            //            _bath2OffsetCur = appliedToSend2;
+            //            _lastWriteCh2 = now;
+
+            //            var t = _tunCh2;
+            //            double absErr = Math.Abs(err2);
+            //            bool isPulseBand = absErr >= t.PulseErrMin && absErr <= t.PulseErrMax;
+            //            double hold = isPulseBand ? Math.Max(t.PulseHoldSeconds, t.MinHoldAfterAnyWriteSeconds)
+            //                                      : t.MinHoldAfterAnyWriteSeconds;
+            //            _holdUntilCh2 = now.AddSeconds(hold);
+            //            _utAtHoldStartCh2 = utCh2;
+            //        }
+            //        else
+            //        {
+            //            appliedToSend2 = _bath2OffsetCur;
+            //        }
+            //    }
+            //    else
+            //    {
+            //        appliedToSend2 = _bath2OffsetCur;
+            //    }
+            //}
+            //else
+            //{
+            //    appliedToSend2 = _bath2OffsetCur;
+            //}
+
+            // 그래프/로그 표시용 "Set(SP+Off)" (실제 장비 내부 해석이 역방향이어도, 관측용으로는 유지)
             double bath1SetTemp = (!double.IsNaN(_bath1OffsetCur)) ? _bath1Setpoint + _bath1OffsetCur : double.NaN;
             double bath2SetTemp = (!double.IsNaN(_bath2OffsetCur)) ? _bath2Setpoint + _bath2OffsetCur : double.NaN;
 
-            // stale 프레임이면(갱신 안 됨) 핵심값이 다 비정상일 때 스킵될 가능성이 큼.
-            // 필요하면 SampleRow에 Stale 필드를 추가해도 됨(현재는 로깅에만 영향).
             _ = stale;
 
             return new SampleRow
@@ -541,8 +758,6 @@ namespace ThermoBathCalibrator
             MultiBoardSnapshot parsed = ParseSnapshot(regs);
 
             // ===== 레지스터 갱신(stale) 판정 =====
-            // Ch1Response=r[1], Ch2Response=r[8]을 "갱신 카운터/플래그"로 가정.
-            // 동일하면 갱신이 안 된 프레임일 수 있음.
             if (_hasLastResp)
             {
                 if (parsed.Ch1Response == _lastRespCh1 && parsed.Ch2Response == _lastRespCh2)
@@ -561,7 +776,6 @@ namespace ThermoBathCalibrator
 
         private MultiBoardSnapshot MergeWithLastGood(MultiBoardSnapshot cur)
         {
-            // "유효"의 기준은 ParseSnapshot에서 이미 NaN 처리된 값이냐 아니냐로 단순화
             bool curHasAny =
                 !double.IsNaN(cur.Ch1Pv) ||
                 !double.IsNaN(cur.Ch2Pv) ||
@@ -579,8 +793,6 @@ namespace ThermoBathCalibrator
                 return cur;
             }
 
-            // cur 값이 NaN이면 lastGood으로 채우고,
-            // cur 값이 유효하면 lastGood을 갱신한다.
             if (double.IsNaN(cur.Ch1Pv)) cur.Ch1Pv = _lastGoodSnap.Ch1Pv;
             else _lastGoodSnap.Ch1Pv = cur.Ch1Pv;
 
@@ -596,7 +808,6 @@ namespace ThermoBathCalibrator
             if (double.IsNaN(cur.Tj)) cur.Tj = _lastGoodSnap.Tj;
             else _lastGoodSnap.Tj = cur.Tj;
 
-            // offset/SV/flag 같은 값들은 일단 최신 우선(원하면 이것도 동일 패턴으로 보정 가능)
             _lastGoodSnap.Ch1Alive = cur.Ch1Alive;
             _lastGoodSnap.Ch1Response = cur.Ch1Response;
             _lastGoodSnap.Ch1Sv = cur.Ch1Sv;
@@ -639,7 +850,6 @@ namespace ThermoBathCalibrator
             double ch2Ext = ch2ExtRaw / 1000.0;
             double tj = tjRaw / 1000.0;
 
-            // 현장 온도 범위에 맞게 조정 가능 (지금은 안전하게 5~80으로 둠)
             if (!IsPlausibleTemp(ch1Pv, 5, 80)) ch1Pv = double.NaN;
             if (!IsPlausibleTemp(ch2Pv, 5, 80)) ch2Pv = double.NaN;
 
@@ -688,18 +898,17 @@ namespace ThermoBathCalibrator
             if (channel == 1)
             {
                 ushort cmd = 0;
-                cmd |= (1 << 1);
+                cmd |= (1 << 1); // offset write
 
                 ushort svWord = unchecked((ushort)((short)Math.Round(_bath1Setpoint * 10.0, MidpointRounding.AwayFromZero)));
 
                 return TryWriteAndWaitAck(channel: 1, cmd: cmd, svWord: svWord, offsetWord: offsetWord, out _);
-
             }
 
             if (channel == 2)
             {
                 ushort cmd = 0;
-                cmd |= (1 << 1);
+                cmd |= (1 << 1); // offset write
 
                 ushort svWord = unchecked((ushort)((short)Math.Round(_bath2Setpoint * 10.0, MidpointRounding.AwayFromZero)));
 
@@ -771,6 +980,7 @@ namespace ThermoBathCalibrator
             response = regs.Length > 0 ? regs[0] : (ushort)0;
             return true;
         }
+
         private static double AverageOrNaN(double a, double b)
         {
             bool aOk = !double.IsNaN(a) && !double.IsInfinity(a);
@@ -782,104 +992,129 @@ namespace ThermoBathCalibrator
             return double.NaN;
         }
 
-        private double CalculateOffsetTarget(int channel, double error)
+        private double CalculateOffsetTarget(int channel, DateTime now, double error)
         {
-            if (Math.Abs(error) < 0.05)
-                return 0.0;
+            // error = SP - UT(보정 후)
+            // 역방향: offset↑ => 온도↓
+            // => deltaOffset = -Kp * error
+            // => targetOffset = curOffset + deltaOffset + iTerm
+
+            OffsetTuning t = (channel == 1) ? _tunCh1 : _tunCh2;
+
+            if (double.IsNaN(error) || double.IsInfinity(error))
+                return double.NaN;
 
             double absErr = Math.Abs(error);
 
-            double kBase;
-            if (absErr >= 0.5) kBase = 1.5;
-            else if (absErr >= 0.2) kBase = 1.0;
-            else kBase = 0.5;
+            double curOffset = (channel == 1) ? _bath1OffsetCur : _bath2OffsetCur;
 
-            double k = kBase + 0.5;
-            double p = error * k;
+            // 1) 데드밴드: 너무 작은 오차는 그대로 유지(채터링 방지)
+            if (absErr < t.Deadband)
+                return curOffset;
 
-            const bool EnableIntegral = true;
-            const double Ki = 0.05;
-            const double IClamp = 0.3;
+            // 2) 미세 오차 구간에서는 "펄스(0.1 step) 후보"를 만든다
+            //    - 단, 이건 실제 Write 정책(TryApplyOffsetWithPolicy)에서 stickiness / hold와 함께 적용된다
+            //    - 여기서는 "원하는 목표값"만 만들어 둔다.
+            if (absErr >= t.PulseErrMin && absErr <= t.PulseErrMax)
+            {
+                // error>0(UT 낮음) => offset을 내려야 함(-0.1)
+                // error<0(UT 높음) => offset을 올려야 함(+0.1)
+                double pulse = curOffset + (-Math.Sign(error) * OffsetStep);
+                pulse = Clamp(pulse, OffsetClampMin, OffsetClampMax);
+                return pulse;
+            }
 
+            // 3) 일반 구간: 오차 크기별 Kp 스케줄
+            double kp;
+            if (absErr >= t.LargeErr) kp = t.KpLarge;
+            else if (absErr >= t.MidErr) kp = t.KpMid;
+            else kp = t.KpSmall;
+
+            double pDelta = -kp * error;
+
+            // 4) 적분 누적(steady-state 오차를 끝까지 밀어주는 용도)
             double i = (channel == 1) ? _iTerm1 : _iTerm2;
 
-            if (EnableIntegral)
-            {
-                double predicted = p + i;
+            i += -error * t.Ki;
+            i = Clamp(i, -t.IClamp, t.IClamp);
 
-                bool atMax = predicted >= OffsetClampMax;
-                bool atMin = predicted <= OffsetClampMin;
-                bool pushingUp = error > 0;
-                bool pushingDown = error < 0;
-
-                bool blockIntegrate = (atMax && pushingUp) || (atMin && pushingDown);
-
-                if (!blockIntegrate)
-                {
-                    i += error * Ki;
-                    i = Clamp(i, -IClamp, IClamp);
-                }
-            }
-
-            const bool EnableDerivative = false;
-            const double Kd = 0.0;
-
-            double d = 0.0;
-            if (EnableDerivative)
-            {
-                double prev = (channel == 1) ? _prevErr1 : _prevErr2;
-                if (!double.IsNaN(prev))
-                {
-                    double derr = error - prev;
-                    d = -Kd * derr;
-                }
-            }
-
-            if (channel == 1) _prevErr1 = error;
-            else _prevErr2 = error;
+            double target = curOffset + pDelta + i;
+            target = Clamp(target, OffsetClampMin, OffsetClampMax);
 
             if (channel == 1) _iTerm1 = i;
             else _iTerm2 = i;
 
-            double target = p + i + d;
-            target = Clamp(target, OffsetClampMin, OffsetClampMax);
             return target;
         }
 
-        private bool TryApplyOffsetWithPolicy(int channel, DateTime now, double err, double desiredAppliedOffset, ref double appliedToSendOffset)
+        private bool TryApplyOffsetWithPolicy(
+            int channel,
+            DateTime now,
+            double err,
+            double desiredAppliedOffset,
+            ref double appliedToSendOffset)
         {
-            const double MaxDeltaPerWrite = 0.2;
-            const double MinChangeToWrite = 0.1;
-
-            double absErr = Math.Abs(err);
-
-            double holdSeconds;
-            if (absErr >= 0.5) holdSeconds = 2.0;
-            else if (absErr >= 0.2) holdSeconds = 3.0;
-            else holdSeconds = 10.0;
+            OffsetTuning t = (channel == 1) ? _tunCh1 : _tunCh2;
 
             double curOffset = (channel == 1) ? _bath1OffsetCur : _bath2OffsetCur;
             DateTime lastWrite = (channel == 1) ? _lastWriteCh1 : _lastWriteCh2;
 
+            // ===== (A-1) UT 반응 기반 hold 해제 (★ FIX: 순서 변경) =====
+            double utNow = channel == 1
+                ? _history.LastOrDefault()?.UtCh1 ?? double.NaN
+                : _history.LastOrDefault()?.UtCh2 ?? double.NaN;
+
+            double utHoldStart = channel == 1
+                ? _utAtHoldStartCh1
+                : _utAtHoldStartCh2;
+
+            double utMoveThreshold = Math.Abs(err) < 0.05 ? 0.005 : 0.01;
+
+            if (!double.IsNaN(utNow) && !double.IsNaN(utHoldStart))
+            {
+                if (Math.Abs(utNow - utHoldStart) >= utMoveThreshold)
+                {
+                    if (channel == 1) _holdUntilCh1 = DateTime.MinValue;
+                    else _holdUntilCh2 = DateTime.MinValue;
+                }
+            }
+
+            // ===== (A) stickiness =====
+            DateTime holdUntil = (channel == 1) ? _holdUntilCh1 : _holdUntilCh2;
+            if (holdUntil != DateTime.MinValue && now < holdUntil)
+            {
+                appliedToSendOffset = curOffset;
+                return false;
+            }
+
+            double absErr = Math.Abs(err);
+
+            // ===== (B) 쓰기 간격 =====
+            double holdSeconds;
+            if (absErr >= t.LargeErr) holdSeconds = t.HoldSecondsLarge;
+            else if (absErr >= t.MidErr) holdSeconds = t.HoldSecondsMid;
+            else holdSeconds = t.HoldSecondsSmall;
+
             if (lastWrite != DateTime.MinValue)
             {
-                double elapsed = (now - lastWrite).TotalSeconds;
-                if (elapsed < holdSeconds)
+                if ((now - lastWrite).TotalSeconds < holdSeconds)
                 {
                     appliedToSendOffset = curOffset;
                     return false;
                 }
             }
 
+            // ===== (C) 변화량 제한 =====
             double delta = desiredAppliedOffset - curOffset;
-            if (Math.Abs(delta) > MaxDeltaPerWrite)
+            if (Math.Abs(delta) > t.MaxDeltaPerWrite)
             {
-                desiredAppliedOffset = curOffset + Math.Sign(delta) * MaxDeltaPerWrite;
+                desiredAppliedOffset = curOffset + Math.Sign(delta) * t.MaxDeltaPerWrite;
                 desiredAppliedOffset = Clamp(desiredAppliedOffset, OffsetClampMin, OffsetClampMax);
                 desiredAppliedOffset = QuantizeOffset(desiredAppliedOffset, OffsetStep);
             }
 
-            if (Math.Abs(desiredAppliedOffset - curOffset) < (MinChangeToWrite - 1e-9))
+            // ===== (D) 최소 변화량 =====
+            if (Math.Abs(desiredAppliedOffset - curOffset) < (t.MinChangeToWrite - 1e-9))
             {
                 appliedToSendOffset = curOffset;
                 return false;
@@ -943,7 +1178,18 @@ namespace ThermoBathCalibrator
         private void AppendRowToHistory(SampleRow r)
         {
             _history.Add(r);
+
+            // 기존: 개수 기반(MaxPoints) 유지
             if (_history.Count > MaxPoints)
+                _history.RemoveAt(0);
+
+            // 추가: "시간 기반 5분 윈도우" 유지(통신 누락/지연이 있어도 그래프가 5분으로 굴러감)
+            DateTime last = _history[_history.Count - 1].Timestamp;
+            DateTime minT = last - GraphWindow;
+
+            // 앞쪽이 5분보다 오래되면 제거
+            // (너무 많이 제거하는 루프를 피하려고 while 사용)
+            while (_history.Count > 2 && _history[0].Timestamp < minT)
                 _history.RemoveAt(0);
         }
 
@@ -994,14 +1240,26 @@ namespace ThermoBathCalibrator
                 g.FillRectangle(bgBrush, plot);
             }
 
-            List<double> pv = channel == 1 ? _history.Select(h => h.Bath1Pv).ToList()
-                                           : _history.Select(h => h.Bath2Pv).ToList();
+            // ===== 시간 기반(최근 5분) x축 윈도우 구성 =====
+            DateTime lastT = _history[_history.Count - 1].Timestamp;
+            DateTime minT = lastT - GraphWindow;
 
-            List<double> ut = channel == 1 ? _history.Select(h => h.UtCh1).ToList()
-                                           : _history.Select(h => h.UtCh2).ToList();
+            // 혹시라도 history가 아직 5분 미만이면, 시작 시간을 history 첫 timestamp로 제한
+            DateTime firstT = _history[0].Timestamp;
+            if (firstT > minT) minT = firstT;
 
-            List<double> setTemp = channel == 1 ? _history.Select(h => h.Bath1SetTemp).ToList()
-                                                : _history.Select(h => h.Bath2SetTemp).ToList();
+            // 채널별 값 리스트
+            List<(DateTime t, double v)> pv = channel == 1
+                ? _history.Select(h => (h.Timestamp, h.Bath1Pv)).ToList()
+                : _history.Select(h => (h.Timestamp, h.Bath2Pv)).ToList();
+
+            List<(DateTime t, double v)> ut = channel == 1
+                ? _history.Select(h => (h.Timestamp, h.UtCh1)).ToList()
+                : _history.Select(h => (h.Timestamp, h.UtCh2)).ToList();
+
+            List<(DateTime t, double v)> setTemp = channel == 1
+                ? _history.Select(h => (h.Timestamp, h.Bath1SetTemp)).ToList()
+                : _history.Select(h => (h.Timestamp, h.Bath2SetTemp)).ToList();
 
             double minY, maxY;
 
@@ -1013,9 +1271,10 @@ namespace ThermoBathCalibrator
             else
             {
                 var all = new List<double>();
-                all.AddRange(pv.Where(v => !double.IsNaN(v) && !double.IsInfinity(v)));
-                all.AddRange(ut.Where(v => !double.IsNaN(v) && !double.IsInfinity(v)));
-                all.AddRange(setTemp.Where(v => !double.IsNaN(v) && !double.IsInfinity(v)));
+
+                all.AddRange(pv.Where(x => x.t >= minT && x.t <= lastT).Select(x => x.v).Where(v => !double.IsNaN(v) && !double.IsInfinity(v)));
+                all.AddRange(ut.Where(x => x.t >= minT && x.t <= lastT).Select(x => x.v).Where(v => !double.IsNaN(v) && !double.IsInfinity(v)));
+                all.AddRange(setTemp.Where(x => x.t >= minT && x.t <= lastT).Select(x => x.v).Where(v => !double.IsNaN(v) && !double.IsInfinity(v)));
 
                 if (all.Count >= 2)
                 {
@@ -1036,11 +1295,23 @@ namespace ThermoBathCalibrator
             }
 
             using var gridPen = new Pen(Color.LightGray, 1);
-            int hLines = 10;
+
+            // ===== Y축 그리드 (0.01 단위) =====
+            double yStep = 0.01;
+            int hLines = (int)Math.Round((maxY - minY) / yStep);
+
             for (int i = 0; i <= hLines; i++)
             {
-                float y = plot.Top + i * (plot.Height / (float)hLines);
-                g.DrawLine(gridPen, plot.Left, y, plot.Right, y);
+                float y = plot.Bottom - (float)(i * (plot.Height / (maxY - minY)) * yStep);
+
+                bool isMajor = (i % 10 == 0);
+
+                using var pen = new Pen(
+                    isMajor ? Color.LightGray : Color.Gainsboro,
+                    isMajor ? 1.5f : 1.0f
+                );
+
+                g.DrawLine(pen, plot.Left, y, plot.Right, y);
             }
 
             using var axisFont = new Font("Segoe UI", 9, FontStyle.Regular);
@@ -1048,43 +1319,69 @@ namespace ThermoBathCalibrator
 
             for (int i = 0; i <= hLines; i++)
             {
-                double v = maxY - i * ((maxY - minY) / hLines);
-                float y = plot.Top + i * (plot.Height / (float)hLines) - 7;
-                g.DrawString(v.ToString("0.000", CultureInfo.InvariantCulture), axisFont, axisBrush, new PointF(clientRect.Left + 5, y));
+                if (i % 10 != 0) continue;
+
+                double v = minY + i * yStep;
+                float y = plot.Bottom - (float)((v - minY) / (maxY - minY) * plot.Height) - 7;
+
+                g.DrawString(
+                    v.ToString("0.000", CultureInfo.InvariantCulture),
+                    axisFont,
+                    axisBrush,
+                    new PointF(clientRect.Left + 5, y)
+                );
             }
 
             using var axisPen = new Pen(Color.Gray, 1);
             g.DrawRectangle(axisPen, plot);
 
+            // ===== X축: "최근 5분" 기준으로 1분 간격 라벨/그리드 =====
             using var xFont = new Font("Segoe UI", 8, FontStyle.Regular);
             using var xBrush = new SolidBrush(Color.DimGray);
 
-            int step = 60;
-            for (int i = 0; i < _history.Count; i += step)
+            // 1분 간격. (minT 기준으로 딱 떨어지게 맞추고 싶으면 minute floor 처리)
+            DateTime tick = new DateTime(minT.Year, minT.Month, minT.Day, minT.Hour, minT.Minute, 0);
+            if (tick < minT) tick = tick.AddMinutes(1);
+
+            while (tick <= lastT)
             {
-                float x = plot.Left + (float)(i * (plot.Width / (double)(_history.Count - 1)));
+                float x = XFromTime(plot, minT, lastT, tick);
                 g.DrawLine(gridPen, x, plot.Top, x, plot.Bottom);
 
-                string t = _history[i].Timestamp.ToString("HH:mm");
-                SizeF sz = g.MeasureString(t, xFont);
-                g.DrawString(t, xFont, xBrush, x - sz.Width / 2, plot.Bottom + 6);
+                string label = tick.ToString("HH:mm");
+                SizeF sz = g.MeasureString(label, xFont);
+                g.DrawString(label, xFont, xBrush, x - sz.Width / 2, plot.Bottom + 6);
+
+                tick = tick.AddMinutes(1);
             }
 
             using var penPv = new Pen(Color.Blue, 2);
             using var penUt = new Pen(Color.Red, 2);
             using var penSet = new Pen(Color.Green, 2);
 
-            DrawSeries(g, plot, pv, minY, maxY, penPv);
-            DrawSeries(g, plot, ut, minY, maxY, penUt);
-            DrawSeries(g, plot, setTemp, minY, maxY, penSet);
+            DrawSeriesTime(g, plot, pv, minT, lastT, minY, maxY, penPv);
+            DrawSeriesTime(g, plot, ut, minT, lastT, minY, maxY, penUt);
+            DrawSeriesTime(g, plot, setTemp, minT, lastT, minY, maxY, penSet);
 
             using var titleFont = new Font("Segoe UI", 11, FontStyle.Bold);
             string title = channel == 1
-                ? "CH1: PV / ExternalThermo / Set(SP+Off)"
-                : "CH2: PV / ExternalThermo / Set(SP+Off)";
+                ? "CH1: PV / ExternalThermo(UT) / Set(SP+Off)"
+                : "CH2: PV / ExternalThermo(UT) / Set(SP+Off)";
             g.DrawString(title, titleFont, Brushes.Black, new PointF(clientRect.Left + 10, clientRect.Top + 8));
 
             DrawLegend(g, clientRect, channel);
+        }
+
+        private static float XFromTime(Rectangle rect, DateTime minT, DateTime maxT, DateTime t)
+        {
+            double spanSec = (maxT - minT).TotalSeconds;
+            if (spanSec <= 0.001) return rect.Right;
+
+            double xRatio = (t - minT).TotalSeconds / spanSec;
+            if (xRatio < 0) xRatio = 0;
+            if (xRatio > 1) xRatio = 1;
+
+            return rect.Left + (float)(xRatio * rect.Width);
         }
 
         private void DrawLegend(Graphics g, Rectangle clientRect, int channel)
@@ -1096,10 +1393,10 @@ namespace ThermoBathCalibrator
             DrawLegendItem(g, x, y, Color.Blue, channel == 1 ? "CH1 PV" : "CH2 PV", font);
             y += 18;
 
-            DrawLegendItem(g, x, y, Color.Red, channel == 1 ? "CH1 ExtThermo" : "CH2 ExtThermo", font);
+            DrawLegendItem(g, x, y, Color.Red, channel == 1 ? "CH1 UT(ExtThermo)" : "CH2 UT(ExtThermo)", font);
             y += 18;
 
-            DrawLegendItem(g, x, y, Color.Green, channel == 1 ? "CH1 Set" : "CH2 Set", font);
+            DrawLegendItem(g, x, y, Color.Green, channel == 1 ? "CH1 Set(SP+Off)" : "CH2 Set(SP+Off)", font);
         }
 
         private void DrawLegendItem(Graphics g, int x, int y, Color c, string text, Font font)
@@ -1109,7 +1406,7 @@ namespace ThermoBathCalibrator
             g.DrawString(text, font, Brushes.Black, new PointF(x + 32, y));
         }
 
-        private void DrawSeries(Graphics g, Rectangle rect, List<double> values, double minY, double maxY, Pen pen)
+        private void DrawSeriesTime(Graphics g, Rectangle rect, List<(DateTime t, double v)> values, DateTime minT, DateTime maxT, double minY, double maxY, Pen pen)
         {
             if (values == null || values.Count < 2) return;
 
@@ -1117,15 +1414,17 @@ namespace ThermoBathCalibrator
 
             for (int i = 0; i < values.Count; i++)
             {
-                double v = values[i];
+                DateTime t = values[i].t;
+                if (t < minT || t > maxT) continue;
 
+                double v = values[i].v;
                 if (double.IsNaN(v) || double.IsInfinity(v))
                 {
                     prev = null;
                     continue;
                 }
 
-                float x = rect.Left + (float)(i * (rect.Width / (double)(values.Count - 1)));
+                float x = XFromTime(rect, minT, maxT, t);
                 float yRatio = (float)((v - minY) / (maxY - minY));
                 float y = rect.Bottom - yRatio * rect.Height;
 
