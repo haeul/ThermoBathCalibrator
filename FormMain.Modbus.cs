@@ -397,7 +397,7 @@ namespace ThermoBathCalibrator
             ushort start = channel == 1 ? RegCh1Command : RegCh2Command;
             ushort[] payload = new ushort[] { cmd, svWord, offsetWord };
 
-            // ✅ 중요: clear는 "command만 0"으로 내리고, SV/Offset은 유지(0,0,0 금지)
+            // 중요: clear는 "command만 0"으로 내리고, SV/Offset은 유지(0,0,0 금지)
             _ = TryClearCommandWord(channel, svWord, offsetWord, reason: reason);
 
             ushort beforeResp = 0;
@@ -448,7 +448,7 @@ namespace ThermoBathCalibrator
             return false;
         }
 
-        // ✅ 수정본: 0,0,0 금지. Command만 0으로 내리고 SV/Offset은 유지.
+        // 수정본: 0,0,0 금지. Command만 0으로 내리고 SV/Offset은 유지.
         private bool TryClearCommandWord(int channel, ushort svWord, ushort offsetWord, string reason)
         {
             ushort start = channel == 1 ? RegCh1Command : RegCh2Command;
