@@ -57,9 +57,12 @@ namespace ThermoBathCalibrator.Controller
             st.LastActionAt = DateTime.MinValue;
         }
 
-        private ChannelState GetState(int channel)
+        // 개선 1) 채널 유효성 검사: 1/2 외 값이면 null 반환
+        private ChannelState? GetStateOrNull(int channel)
         {
-            return channel == 1 ? _ch1 : _ch2;
+            if (channel == 1) return _ch1;
+            if (channel == 2) return _ch2;
+            return null;
         }
 
         public double UpdateAndMaybeWrite(
@@ -75,13 +78,20 @@ namespace ThermoBathCalibrator.Controller
             if (!readOk || double.IsNaN(ut) || double.IsNaN(err))
                 return currentOffset;
 
-            ChannelState st = GetState(channel);
+            ChannelState? st = GetStateOrNull(channel);
+            if (st == null)
+            {
+                traceLog?.Invoke($"AUTO SMART invalid channel={channel} -> skip");
+                return currentOffset;
+            }
+
             EnsureLocalOffsetInitialized(st, currentOffset);
 
             int currentTempMilli = ToMilli(ut);
 
-            // 1) If local target offset and device readback differ, resend using existing write/ACK path.
-            if (!AreSameOffset(st.CurrentBathOffset, currentOffset))
+            // 개선 2) offset 비교 허용오차 완화: OffsetStep의 절반을 기준으로 비교
+            // (double 오차로 인한 불필요 mismatch resend 방지)
+            if (!AreSameOffset(st.CurrentBathOffset, currentOffset, _cfg.OffsetStep))
             {
                 bool resent = TryWriteAndConfirm(
                     channel,
@@ -94,7 +104,7 @@ namespace ThermoBathCalibrator.Controller
                 return resent ? st.CurrentBathOffset : currentOffset;
             }
 
-            // 2) Follow-up correction based on previous action (+/-0.01°C crossing)
+            // Follow-up correction based on previous action (+/-0.01°C crossing)
             if (st.PrevAction == TempDirection.Up && currentTempMilli > TARGET_TEMP_MILLI + FOLLOW_UP_THRESHOLD_MILLI)
             {
                 double next = QuantizeClamp(currentOffset + _cfg.OffsetStep);
@@ -127,14 +137,14 @@ namespace ThermoBathCalibrator.Controller
                 return ok ? next : currentOffset;
             }
 
-            // 3) Initialize prev temp for slope
+            // Initialize prev temp for slope
             if (!st.PrevTempMilli.HasValue)
             {
                 st.PrevTempMilli = currentTempMilli;
                 return currentOffset;
             }
 
-            // 4) Enforce minimum action interval (60s)
+            // Enforce minimum action interval (60s)
             if (st.LastActionAt != DateTime.MinValue &&
                 (now - st.LastActionAt).TotalMilliseconds < MIN_ACTION_INTERVAL_MS)
             {
@@ -167,7 +177,7 @@ namespace ThermoBathCalibrator.Controller
                 {
                     targetOffset = QuantizeClamp(currentOffset + _cfg.OffsetStep);
                     st.PrevAction = TempDirection.Down;
-                    isAction = !AreSameOffset(targetOffset, currentOffset);
+                    isAction = !AreSameOffset(targetOffset, currentOffset, _cfg.OffsetStep);
                 }
             }
             // Too cold -> offset down (heating side)
@@ -180,7 +190,7 @@ namespace ThermoBathCalibrator.Controller
                 {
                     targetOffset = QuantizeClamp(currentOffset - _cfg.OffsetStep);
                     st.PrevAction = TempDirection.Up;
-                    isAction = !AreSameOffset(targetOffset, currentOffset);
+                    isAction = !AreSameOffset(targetOffset, currentOffset, _cfg.OffsetStep);
                 }
             }
 
@@ -241,9 +251,11 @@ namespace ThermoBathCalibrator.Controller
             return (int)Math.Round(tempC * 1000.0, MidpointRounding.AwayFromZero);
         }
 
-        private static bool AreSameOffset(double a, double b)
+        // 개선 2) 비교 허용오차: OffsetStep의 절반(최소 epsilon은 아주 작게 보장)
+        private static bool AreSameOffset(double a, double b, double offsetStep)
         {
-            return Math.Abs(a - b) <= 1e-9;
+            double eps = Math.Max(1e-6, Math.Abs(offsetStep) * 0.5);
+            return Math.Abs(a - b) <= eps;
         }
     }
 }
