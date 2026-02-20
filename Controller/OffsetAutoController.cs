@@ -4,47 +4,39 @@ namespace ThermoBathCalibrator.Controller
 {
     internal sealed class OffsetAutoController
     {
+        // Smart Bath Control constants (m°C scale)
+        private const int TARGET_TEMP_MILLI = 25000;
+        private const int DEADBAND_MILLI = 20;            // ±0.02°C
+        private const int SLOPE_THRESHOLD_MILLI = 5;      // 0.005°C per tick (1s)
+        private const int MIN_ACTION_INTERVAL_MS = 60000; // 60s
+        private const int FOLLOW_UP_THRESHOLD_MILLI = 10; // ±0.01°C
+
+        private enum TempDirection
+        {
+            Init = 0,
+            Up,
+            Down
+        }
+
         private sealed class ChannelState
         {
-            public DateTime LastWrite = DateTime.MinValue;
-            public DateTime LastAdjust = DateTime.MinValue;
+            // Last commanded offset tracked locally for resend mismatch check
+            public double CurrentBathOffset = double.NaN;
 
-            public double PrevUt = double.NaN;
-            public double PrevErr = double.NaN;
+            // Previous temperature (m°C) for slope calculation
+            public int? PrevTempMilli;
 
-            public int WrongTrendCount;
-            public double LastDeltaApplied;
+            // Previous action direction for follow-up correction
+            public TempDirection PrevAction = TempDirection.Init;
 
-            public double Aggressiveness = 1.0;
-            public DateTime LargeErrorStart = DateTime.MinValue;
-
-            public bool PwmActive;
-            public DateTime PwmPeriodStart = DateTime.MinValue;
-            public double PwmDutyHigh = 0.5;
-            public double PwmOffsetLow = double.NaN;
-            public double PwmOffsetHigh = double.NaN;
-
-            // 발산 방지
-            public DateTime StartupAt = DateTime.MinValue;
-
-            public bool HasLastCommanded;
-            public double LastCommandedOffset = double.NaN;
-            public double LastCommandedAbsErr = double.NaN;
-
-            public int WorsenStreak;
-            public DateTime FreezeUntil = DateTime.MinValue;
-
-            public bool TightDeadbandActive;
-            public int DivergenceStreak;
-
-            public readonly Queue<(DateTime t, double ut)> UtHist = new Queue<(DateTime, double)>();
+            // Last time we considered an action (enforces MIN_ACTION_INTERVAL_MS)
+            public DateTime LastActionAt = DateTime.MinValue;
         }
 
         private readonly OffsetAutoConfig _cfg;
 
         private readonly ChannelState _ch1 = new ChannelState();
         private readonly ChannelState _ch2 = new ChannelState();
-
 
         public OffsetAutoController(OffsetAutoConfig cfg)
         {
@@ -57,37 +49,12 @@ namespace ThermoBathCalibrator.Controller
             ResetChannel(_ch2);
         }
 
-        private static void ResetChannel(ChannelState s)
+        private static void ResetChannel(ChannelState st)
         {
-            s.LastWrite = DateTime.MinValue;
-            s.LastAdjust = DateTime.MinValue;
-
-            s.PrevUt = double.NaN;
-            s.PrevErr = double.NaN;
-            s.WrongTrendCount = 0;
-            s.LastDeltaApplied = 0.0;
-
-            s.Aggressiveness = 1.0;
-            s.LargeErrorStart = DateTime.MinValue;
-
-            s.PwmActive = false;
-            s.PwmPeriodStart = DateTime.MinValue;
-            s.PwmDutyHigh = 0.5;
-            s.PwmOffsetLow = double.NaN;
-            s.PwmOffsetHigh = double.NaN;
-
-            // 발산 방지
-            s.StartupAt = DateTime.MinValue;
-
-            s.HasLastCommanded = false;
-            s.LastCommandedOffset = double.NaN;
-            s.LastCommandedAbsErr = double.NaN;
-
-            s.WorsenStreak = 0;
-            s.FreezeUntil = DateTime.MinValue;
-
-            s.TightDeadbandActive = false;
-            s.DivergenceStreak = 0;
+            st.CurrentBathOffset = double.NaN;
+            st.PrevTempMilli = null;
+            st.PrevAction = TempDirection.Init;
+            st.LastActionAt = DateTime.MinValue;
         }
 
         private ChannelState GetState(int channel)
@@ -109,556 +76,174 @@ namespace ThermoBathCalibrator.Controller
                 return currentOffset;
 
             ChannelState st = GetState(channel);
+            EnsureLocalOffsetInitialized(st, currentOffset);
 
-            if (st.StartupAt == DateTime.MinValue)
-                st.StartupAt = now;
+            int currentTempMilli = ToMilli(ut);
 
-            // 1) Startup warmup: no writes
-            if ((now - st.StartupAt).TotalSeconds < _cfg.StartupWarmupSeconds)
+            // 1) If local target offset and device readback differ, resend using existing write/ACK path.
+            if (!AreSameOffset(st.CurrentBathOffset, currentOffset))
             {
-                st.PrevErr = err;
-                st.PrevUt = ut;
-                traceLog?.Invoke($"AUTO CTRL CH{channel} safety=WARMUP skipWrite sec={(now - st.StartupAt).TotalSeconds:F1} UT={utFmt(ut)} err={err:F4}");
-                return currentOffset;
-            }
-
-            double dErr = (!double.IsNaN(st.PrevErr)) ? (err - st.PrevErr) : double.NaN;
-            double dUt = (!double.IsNaN(st.PrevUt)) ? (ut - st.PrevUt) : double.NaN;
-            double absErr = Math.Abs(err);
-
-            // Tight deadband with hysteresis to suppress dithering near target.
-            if (!st.TightDeadbandActive && absErr <= _cfg.TightDeadbandEnter)
-                st.TightDeadbandActive = true;
-            else if (st.TightDeadbandActive && absErr >= _cfg.TightDeadbandExit)
-                st.TightDeadbandActive = false;
-
-            if (st.TightDeadbandActive)
-            {
-                st.PwmActive = false;
-                st.PrevErr = err;
-                st.PrevUt = ut;
-                traceLog?.Invoke($"AUTO CTRL CH{channel} mode=HOLD_TIGHT_DEADBAND UT={utFmt(ut)} err={err:F4} enter={_cfg.TightDeadbandEnter:F4} exit={_cfg.TightDeadbandExit:F4}");
-                return currentOffset;
-            }
-
-            // 2) Freeze window: no writes
-            if (now < st.FreezeUntil)
-            {
-                st.PrevErr = err;
-                st.PrevUt = ut;
-                traceLog?.Invoke($"AUTO CTRL CH{channel} safety=FREEZE skipWrite remain={(st.FreezeUntil - now).TotalSeconds:F1}s UT={utFmt(ut)} err={err:F4}");
-                return currentOffset;
-            }
-
-            // 3) Minimum hold after any successful write: wait thermal response.
-            double sinceWrite = (st.LastWrite == DateTime.MinValue) ? double.MaxValue : (now - st.LastWrite).TotalSeconds;
-            if (sinceWrite < _cfg.MinHoldAfterWriteSeconds)
-            {
-                st.PrevErr = err;
-                st.PrevUt = ut;
-                traceLog?.Invoke($"AUTO CTRL CH{channel} safety=POST_WRITE_HOLD skipWrite remain={(_cfg.MinHoldAfterWriteSeconds - sinceWrite):F1}s UT={utFmt(ut)} err={err:F4} dUT={dUtFmt(dUt)}");
-                return currentOffset;
-            }
-            if (TryHandleWorseningRollback(channel, now, err, currentOffset, st, tryWriteOffset, traceLog))
-            {
-                st.PrevErr = err;
-                st.PrevUt = ut;
-                return currentOffset;
-            }
-
-            if (UpdateDivergenceGuard(channel, now, err, dUt, currentOffset, st, tryWriteOffset, traceLog))
-            {
-                st.PrevErr = err;
-                st.PrevUt = ut;
-                return currentOffset;
-            }
-            bool overshoot = !double.IsNaN(st.PrevErr)
-                && Math.Sign(st.PrevErr) != 0
-                && Math.Sign(err) != 0
-                && Math.Sign(st.PrevErr) != Math.Sign(err);
-
-            // For this system: err = target - UT.
-            // err > 0 means UT is low and we need heating, so offset should go down.
-            // err < 0 means UT is high and we need cooling, so offset should go up.
-            int desiredDirection = -Math.Sign(err); // +1 => offset up(cool), -1 => offset down(heat)
-
-            double slopePerSec = ComputeWindowSlopePerSec(st, now, ut);
-
-            if (IsSlopeOpposingTarget(err, slopePerSec))
-            {
-                st.PrevErr = err;
-                st.PrevUt = ut;
-                traceLog?.Invoke($"AUTO CTRL CH{channel} safety=SLOPE_BLOCK skipWrite UT={utFmt(ut)} err={err:F4} slope={slopePerSec:E3}C/s");
-                return currentOffset;
-            }
-
-            UpdateStallAggressiveness(now, absErr, st);
-            UpdateWrongTrendGuard(absErr, st);
-
-            if (overshoot)
-            {
-                st.PwmActive = true;
-                st.PwmPeriodStart = now;
-                st.Aggressiveness = Math.Max(0.5, st.Aggressiveness * 0.7);
-            }
-
-            bool pwmAllowed = absErr <= _cfg.FinePwmEnterErr || (st.PwmActive && absErr <= _cfg.FinePwmExitErr) || overshoot;
-
-            if (pwmAllowed)
-            {
-                currentOffset = RunPwm(
+                bool resent = TryWriteAndConfirm(
                     channel,
-                    now,
-                    err,
-                    currentOffset,
                     st,
+                    st.CurrentBathOffset,
+                    "AUTO_RESEND_MISMATCH",
                     tryWriteOffset,
-                    traceLog,
-                    absErr,
-                    dErr,
-                    dUt,
-                    overshoot);
+                    traceLog);
 
-                if (st.PwmActive)
+                return resent ? st.CurrentBathOffset : currentOffset;
+            }
+
+            // 2) Follow-up correction based on previous action (+/-0.01°C crossing)
+            if (st.PrevAction == TempDirection.Up && currentTempMilli > TARGET_TEMP_MILLI + FOLLOW_UP_THRESHOLD_MILLI)
+            {
+                double next = QuantizeClamp(currentOffset + _cfg.OffsetStep);
+                st.PrevAction = TempDirection.Init;
+
+                bool ok = TryWriteAndConfirm(
+                    channel,
+                    st,
+                    next,
+                    "AUTO_UP_OVERSHOOT",
+                    tryWriteOffset,
+                    traceLog);
+
+                return ok ? next : currentOffset;
+            }
+
+            if (st.PrevAction == TempDirection.Down && currentTempMilli < TARGET_TEMP_MILLI - FOLLOW_UP_THRESHOLD_MILLI)
+            {
+                double next = QuantizeClamp(currentOffset - _cfg.OffsetStep);
+                st.PrevAction = TempDirection.Init;
+
+                bool ok = TryWriteAndConfirm(
+                    channel,
+                    st,
+                    next,
+                    "AUTO_DOWN_OVERSHOOT",
+                    tryWriteOffset,
+                    traceLog);
+
+                return ok ? next : currentOffset;
+            }
+
+            // 3) Initialize prev temp for slope
+            if (!st.PrevTempMilli.HasValue)
+            {
+                st.PrevTempMilli = currentTempMilli;
+                return currentOffset;
+            }
+
+            // 4) Enforce minimum action interval (60s)
+            if (st.LastActionAt != DateTime.MinValue &&
+                (now - st.LastActionAt).TotalMilliseconds < MIN_ACTION_INTERVAL_MS)
+            {
+                return currentOffset;
+            }
+
+            int slopeMilli = currentTempMilli - st.PrevTempMilli.Value;
+            int errorMilli = currentTempMilli - TARGET_TEMP_MILLI;
+
+            st.PrevTempMilli = currentTempMilli;
+
+            // Deadband: update time only
+            if (Math.Abs(errorMilli) <= DEADBAND_MILLI)
+            {
+                st.LastActionAt = now;
+                st.PrevAction = TempDirection.Init;
+                return currentOffset;
+            }
+
+            bool isAction = false;
+            double targetOffset = currentOffset;
+
+            // Too hot -> offset up (cooling side)
+            if (errorMilli > DEADBAND_MILLI)
+            {
+                st.LastActionAt = now;
+
+                // If already cooling fast enough, skip; otherwise apply offset up
+                if (slopeMilli > -SLOPE_THRESHOLD_MILLI)
                 {
-                    st.PrevErr = err;
-                    st.PrevUt = ut;
-                    return currentOffset;
+                    targetOffset = QuantizeClamp(currentOffset + _cfg.OffsetStep);
+                    st.PrevAction = TempDirection.Down;
+                    isAction = !AreSameOffset(targetOffset, currentOffset);
+                }
+            }
+            // Too cold -> offset down (heating side)
+            else if (errorMilli < -DEADBAND_MILLI)
+            {
+                st.LastActionAt = now;
+
+                // If already heating fast enough, skip; otherwise apply offset down
+                if (slopeMilli < SLOPE_THRESHOLD_MILLI)
+                {
+                    targetOffset = QuantizeClamp(currentOffset - _cfg.OffsetStep);
+                    st.PrevAction = TempDirection.Up;
+                    isAction = !AreSameOffset(targetOffset, currentOffset);
                 }
             }
 
-            st.PwmActive = false;
+            if (!isAction)
+                return currentOffset;
 
-            currentOffset = RunCoarse(
+            bool writeOk = TryWriteAndConfirm(
                 channel,
-                now,
-                ut,
-                err,
-                currentOffset,
-                desiredDirection,
                 st,
+                targetOffset,
+                "AUTO_SMART_CTRL",
                 tryWriteOffset,
-                traceLog,
-                absErr,
-                dErr,
-                dUt,
-                overshoot);
+                traceLog);
 
-            st.PrevErr = err;
-            st.PrevUt = ut;
-            return currentOffset;
+            return writeOk ? targetOffset : currentOffset;
         }
 
-        private bool TryHandleWorseningRollback(
-    int channel,
-    DateTime now,
-    double err,
-    double currentOffset,
-    ChannelState st,
-    Func<int, double, string, bool> tryWriteOffset,
-    Action<string>? traceLog)
+        private void EnsureLocalOffsetInitialized(ChannelState st, double currentOffset)
         {
-            if (!st.HasLastCommanded)
-                return false;
+            if (!double.IsNaN(st.CurrentBathOffset))
+                return;
 
-            // 최근에 쓴 뒤에는 관찰 시간 동안만 악화를 체크한다
-            double sinceWrite = (st.LastWrite == DateTime.MinValue) ? double.MaxValue : (now - st.LastWrite).TotalSeconds;
-            if (sinceWrite > _cfg.PostWriteObserveSeconds)
-            {
-                st.WorsenStreak = 0;
-                return false;
-            }
+            st.CurrentBathOffset = currentOffset;
+            st.PrevTempMilli = null;
+            st.PrevAction = TempDirection.Init;
+            st.LastActionAt = DateTime.MinValue;
+        }
 
-            double absErr = Math.Abs(err);
-            if (!double.IsNaN(st.LastCommandedAbsErr) && absErr > st.LastCommandedAbsErr + _cfg.WorsenEpsilon)
-                st.WorsenStreak++;
-            else
-                st.WorsenStreak = 0;
-
-            if (st.WorsenStreak < _cfg.WorsenStreakTrigger)
-                return false;
-
-            // 롤백 목표: 마지막 커맨드 offset에서 한 칸(0.1) 반대 방향으로 되돌린다
-            double delta = currentOffset - st.LastCommandedOffset;
-            double rollback = st.LastCommandedOffset - Math.Sign(delta) * _cfg.OffsetStep;
-            rollback = OffsetMath.Clamp(rollback, _cfg.OffsetClampMin, _cfg.OffsetClampMax);
-            rollback = OffsetMath.Quantize(rollback, _cfg.OffsetStep);
-
-            // 너무 자주 쓰지 않도록 최소 간격 준수
-            if ((now - st.LastWrite).TotalSeconds < _cfg.MinAutoWriteIntervalSeconds)
-            {
-                traceLog?.Invoke($"AUTO CTRL CH{channel} safety=ROLLBACK armed but rate-limited UT=? err={err:F4} cur={currentOffset:F3}");
-                return true;
-            }
-
-            bool ok = tryWriteOffset(channel, rollback, $"AUTO_SAFETY_ROLLBACK_CH{channel}");
-            traceLog?.Invoke($"AUTO CTRL CH{channel} safety=ROLLBACK worsenStreak={st.WorsenStreak} sinceWrite={sinceWrite:F1}s lastCmd={st.LastCommandedOffset:F3} cur={currentOffset:F3} rollback={rollback:F3} ok={ok}");
-
-            // 롤백이 성공하든 실패하든, 일단 더 건드리면 위험하니까 프리즈
-            st.FreezeUntil = now.AddSeconds(_cfg.RollbackFreezeSeconds);
-            st.WorsenStreak = 0;
-
+        private bool TryWriteAndConfirm(
+            int channel,
+            ChannelState st,
+            double targetOffset,
+            string reason,
+            Func<int, double, string, bool> tryWriteOffset,
+            Action<string>? traceLog)
+        {
+            bool ok = tryWriteOffset(channel, targetOffset, reason);
             if (ok)
             {
-                st.LastWrite = now;
-                st.LastAdjust = now;
-                st.LastDeltaApplied = rollback - currentOffset;
-
-                // 롤백도 "마지막 커맨드"로 갱신
-                st.LastCommandedOffset = rollback;
-                st.LastCommandedAbsErr = absErr;
-            }
-
-            return true;
-        }
-
-        private double RunCoarse(
-            int channel,
-            DateTime now,
-            double ut,
-            double err,
-            double currentOffset,
-            int desiredDirection,
-            ChannelState st,
-            Func<int, double, string, bool> tryWriteOffset,
-            Action<string>? traceLog,
-            double absErr,
-            double dErr,
-            double dUt,
-            bool overshoot)
-        {
-            (double baseStep, double baseHold) = GetStepAndHold(absErr);
-            if (baseStep <= 0.0)
-            {
-                traceLog?.Invoke($"AUTO CTRL CH{channel} mode=COARSE hold=DEADBAND UT={utFmt(ut)} err={err:F4} dErr={dErrFmt(dErr)} dUT={dUtFmt(dUt)} offset={currentOffset:F3}");
-                return currentOffset;
-            }
-
-            double effectiveAggressiveness = st.Aggressiveness;
-            double step = OffsetMath.Quantize(baseStep * effectiveAggressiveness, _cfg.OffsetStep);
-            step = Math.Max(_cfg.OffsetStep, step);
-            double hold = Math.Max(_cfg.MinAutoWriteIntervalSeconds, baseHold / Math.Max(1.0, effectiveAggressiveness));
-
-            // Wrong-trend guard: if error keeps worsening, soften and reverse one quantum.
-            bool shouldReverse = st.WrongTrendCount >= _cfg.WrongTrendTriggerSamples && Math.Abs(st.LastDeltaApplied) > 1e-9;
-            if (shouldReverse)
-            {
-                double reverse = -Math.Sign(st.LastDeltaApplied) * _cfg.OffsetStep * _cfg.ReverseStepTicksOnWrongTrend;
-                double reverseTarget = OffsetMath.Quantize(OffsetMath.Clamp(currentOffset + reverse, _cfg.OffsetClampMin, _cfg.OffsetClampMax), _cfg.OffsetStep);
-
-                if ((now - st.LastWrite).TotalSeconds >= _cfg.MinAutoWriteIntervalSeconds && Math.Abs(reverseTarget - currentOffset) > 1e-9)
-                {
-                    bool ok = tryWriteOffset(channel, reverseTarget, $"AUTO_GUARD_REVERSE_CH{channel}");
-                    traceLog?.Invoke($"AUTO CTRL CH{channel} mode=COARSE guard=WRONG_TREND action=REVERSE UT={utFmt(ut)} err={err:F4} dErr={dErrFmt(dErr)} dUT={dUtFmt(dUt)} next={reverseTarget:F3} ok={ok}");
-                    if (ok)
-                    {
-                        st.HasLastCommanded = true;
-                        st.LastCommandedOffset = reverseTarget;
-                        st.LastCommandedAbsErr = Math.Abs(err);
-
-                        st.LastWrite = now;
-                        st.LastAdjust = now;
-                        st.LastDeltaApplied = reverseTarget - currentOffset;
-                        st.WrongTrendCount = 0;
-                        st.Aggressiveness = Math.Max(0.5, st.Aggressiveness * _cfg.WrongTrendAggressivenessScale);
-                        return reverseTarget;
-                    }
-                }
-            }
-
-            if ((now - st.LastAdjust).TotalSeconds < hold)
-            {
-                traceLog?.Invoke($"AUTO CTRL CH{channel} mode=COARSE action=WAIT_HOLD UT={utFmt(ut)} err={err:F4} dErr={dErrFmt(dErr)} dUT={dUtFmt(dUt)} hold={hold:F1}s");
-                return currentOffset;
-            }
-
-            double next = currentOffset + (desiredDirection * step);
-            next = OffsetMath.Clamp(next, _cfg.OffsetClampMin, _cfg.OffsetClampMax);
-            next = OffsetMath.Quantize(next, _cfg.OffsetStep);
-
-            if (Math.Abs(next - currentOffset) < 1e-9)
-            {
-                traceLog?.Invoke($"AUTO CTRL CH{channel} mode=COARSE action=NO_MOVE_CLAMP UT={utFmt(ut)} err={err:F4} next={next:F3}");
-                return currentOffset;
-            }
-
-            if ((now - st.LastWrite).TotalSeconds < _cfg.MinAutoWriteIntervalSeconds)
-            {
-                traceLog?.Invoke($"AUTO CTRL CH{channel} mode=COARSE action=WAIT_RATE_LIMIT UT={utFmt(ut)} err={err:F4} minInt={_cfg.MinAutoWriteIntervalSeconds:F1}s");
-                return currentOffset;
-            }
-
-            bool writeOk = tryWriteOffset(channel, next, $"AUTO_COARSE_CH{channel}");
-            traceLog?.Invoke($"AUTO CTRL CH{channel} mode=COARSE UT={utFmt(ut)} err={err:F4} dErr={dErrFmt(dErr)} dUT={dUtFmt(dUt)} step={step:F2} hold={hold:F1}s aggr={effectiveAggressiveness:F2} overshoot={overshoot} next={next:F3} ok={writeOk}");
-
-            if (!writeOk)
-                return currentOffset;
-
-            // 마지막 커맨드 기록(롤백/발산감지용)
-            st.HasLastCommanded = true;
-            st.LastCommandedOffset = next;
-            st.LastCommandedAbsErr = Math.Abs(err);
-
-            st.LastWrite = now;
-            st.LastAdjust = now;
-            st.LastDeltaApplied = next - currentOffset;
-            return next;
-        }
-
-        private double RunPwm(
-            int channel,
-            DateTime now,
-            double err,
-            double currentOffset,
-            ChannelState st,
-            Func<int, double, string, bool> tryWriteOffset,
-            Action<string>? traceLog,
-            double absErr,
-            double dErr,
-            double dUt,
-            bool overshoot)
-        {
-            st.PwmActive = true;
-
-            int desiredDirection = -Math.Sign(err);
-            double neighbor = currentOffset + (desiredDirection * _cfg.OffsetStep);
-            neighbor = OffsetMath.Clamp(neighbor, _cfg.OffsetClampMin, _cfg.OffsetClampMax);
-            neighbor = OffsetMath.Quantize(neighbor, _cfg.OffsetStep);
-
-            if (Math.Abs(neighbor - currentOffset) < 1e-9)
-            {
-                st.PwmActive = false;
-                traceLog?.Invoke($"AUTO CTRL CH{channel} mode=PWM action=NO_NEIGHBOR UT={utFmt(st.PrevUt)} err={err:F4} offset={currentOffset:F3}");
-                return currentOffset;
-            }
-
-            st.PwmOffsetLow = Math.Min(currentOffset, neighbor);
-            st.PwmOffsetHigh = Math.Max(currentOffset, neighbor);
-
-            // dutyHigh is for higher offset (cooling side). Keep sign mapping explicit.
-            double dutyHigh = 0.5;
-            if (err < 0.0)
-            {
-                // UT above target -> need cooling -> spend more time on high offset.
-                dutyHigh = 0.5 + (Math.Abs(err) * _cfg.FinePwmDutyGainPerError);
-            }
-            else if (err > 0.0)
-            {
-                // UT below target -> need heating -> spend less time on high offset.
-                dutyHigh = 0.5 - (Math.Abs(err) * _cfg.FinePwmDutyGainPerError);
-            }
-
-            dutyHigh = OffsetMath.Clamp(dutyHigh, _cfg.FinePwmMinDutyHigh, _cfg.FinePwmMaxDutyHigh);
-            st.PwmDutyHigh = dutyHigh;
-
-            double elapsed = (now - st.PwmPeriodStart).TotalSeconds;
-            if (st.PwmPeriodStart == DateTime.MinValue || elapsed >= _cfg.FinePwmPeriodSec)
-            {
-                st.PwmPeriodStart = now;
-                elapsed = 0.0;
-            }
-
-            double targetOffset = elapsed < (st.PwmDutyHigh * _cfg.FinePwmPeriodSec)
-                ? st.PwmOffsetHigh
-                : st.PwmOffsetLow;
-
-            if ((now - st.LastWrite).TotalSeconds < _cfg.MinAutoWriteIntervalSeconds)
-            {
-                traceLog?.Invoke($"AUTO CTRL CH{channel} mode=PWM action=WAIT_RATE_LIMIT UT={utFmt(st.PrevUt)} err={err:F4} dErr={dErrFmt(dErr)} dutyHigh={st.PwmDutyHigh:F2}");
-                return currentOffset;
-            }
-
-            if (Math.Abs(targetOffset - currentOffset) < 1e-9)
-            {
-                traceLog?.Invoke($"AUTO CTRL CH{channel} mode=PWM action=HOLD UT={utFmt(st.PrevUt)} err={err:F4} dErr={dErrFmt(dErr)} dUT={dUtFmt(dUt)} low={st.PwmOffsetLow:F3} high={st.PwmOffsetHigh:F3} dutyHigh={st.PwmDutyHigh:F2} overshoot={overshoot}");
-                return currentOffset;
-            }
-
-            bool ok = tryWriteOffset(channel, targetOffset, $"AUTO_PWM_CH{channel}");
-            traceLog?.Invoke($"AUTO CTRL CH{channel} mode=PWM UT={utFmt(st.PrevUt)} err={err:F4} dErr={dErrFmt(dErr)} dUT={dUtFmt(dUt)} low={st.PwmOffsetLow:F3} high={st.PwmOffsetHigh:F3} dutyHigh={st.PwmDutyHigh:F2} selected={targetOffset:F3} overshoot={overshoot} ok={ok}");
-
-            if (!ok)
-                return currentOffset;
-
-            // 마지막 커맨드 기록(롤백/발산감지용)
-            st.HasLastCommanded = true;
-            st.LastCommandedOffset = targetOffset;
-            st.LastCommandedAbsErr = Math.Abs(err);
-
-            st.LastWrite = now;
-            st.LastDeltaApplied = targetOffset - currentOffset;
-            return targetOffset;
-        }
-
-        private bool UpdateDivergenceGuard(
-           int channel,
-           DateTime now,
-           double err,
-           double dUt,
-           double currentOffset,
-           ChannelState st,
-           Func<int, double, string, bool> tryWriteOffset,
-           Action<string>? traceLog)
-        {
-            if (double.IsNaN(st.PrevErr) || double.IsNaN(dUt))
-            {
-                st.DivergenceStreak = 0;
-                return false;
-            }
-
-            bool errorWorsening = Math.Abs(err) > Math.Abs(st.PrevErr) + _cfg.WorsenEpsilon;
-            bool slopeAway = IsSlopeOpposingTarget(err, dUt);
-
-            if (errorWorsening && slopeAway)
-                st.DivergenceStreak++;
-            else
-                st.DivergenceStreak = 0;
-
-            if (st.DivergenceStreak < _cfg.DivergenceTriggerSamples)
-                return false;
-
-            double safeOffset = st.HasLastCommanded ? st.LastCommandedOffset : currentOffset;
-            safeOffset = OffsetMath.Clamp(safeOffset, _cfg.OffsetClampMin, _cfg.OffsetClampMax);
-            safeOffset = OffsetMath.Quantize(safeOffset, _cfg.OffsetStep);
-
-            bool wrote = false;
-            if (Math.Abs(safeOffset - currentOffset) > 1e-9 && (now - st.LastWrite).TotalSeconds >= _cfg.MinAutoWriteIntervalSeconds)
-            {
-                wrote = tryWriteOffset(channel, safeOffset, $"AUTO_SAFETY_DIVERGENCE_ROLLBACK_CH{channel}");
-                if (wrote)
-                {
-                    st.LastWrite = now;
-                    st.LastAdjust = now;
-                    st.LastDeltaApplied = safeOffset - currentOffset;
-                    st.LastCommandedOffset = safeOffset;
-                    st.LastCommandedAbsErr = Math.Abs(err);
-                }
-            }
-
-            st.FreezeUntil = now.AddSeconds(_cfg.RollbackFreezeSeconds);
-            st.DivergenceStreak = 0;
-
-            traceLog?.Invoke($"AUTO CTRL CH{channel} safety=DIVERGENCE freeze={_cfg.RollbackFreezeSeconds:F1}s rollback={safeOffset:F3} wrote={wrote} err={err:F4} prevErr={st.PrevErr:F4} dUT={dUtFmt(dUt)}");
-            return true;
-        }
-
-        private double ComputeWindowSlopePerSec(ChannelState st, DateTime now, double ut)
-        {
-            // 1) 샘플 push
-            st.UtHist.Enqueue((now, ut));
-
-            // 2) 오래된 샘플 정리(메모리/노이즈 방지)
-            var maxAge = TimeSpan.FromSeconds(_cfg.SlopeSampleMaxAgeSeconds);
-            while (st.UtHist.Count > 0 && (now - st.UtHist.Peek().t) > maxAge)
-                st.UtHist.Dequeue();
-
-            // 3) 윈도우 안에 있는 샘플만 남기기
-            var win = TimeSpan.FromSeconds(_cfg.SlopeWindowSeconds);
-            while (st.UtHist.Count > 0 && (now - st.UtHist.Peek().t) > win)
-                st.UtHist.Dequeue();
-
-            if (st.UtHist.Count < _cfg.SlopeMinSamples)
-                return double.NaN;
-
-            var first = st.UtHist.Peek();
-            var last = st.UtHist.Last(); // using System.Linq;
-
-            var dt = (last.t - first.t).TotalSeconds;
-            if (dt <= 0.0) return double.NaN;
-
-            return (last.ut - first.ut) / dt; // °C / sec
-        }
-
-
-        private bool IsSlopeOpposingTarget(double err, double slopePerSec)
-        {
-            if (double.IsNaN(slopePerSec))
-                return false; // 정보 부족이면 막지 말고 진행(오탐 방지)
-
-            // err = target - UT
-            // err > 0: UT가 낮다 -> 가열 필요 -> UT는 "올라가야 정상" (slope > 0)
-            // err < 0: UT가 높다 -> 냉각 필요 -> UT는 "내려가야 정상" (slope < 0)
-
-            if (err > 0.0)
-                return slopePerSec <= -_cfg.SlopeWrongDirectionEpsilon; // 내려가면(반대) block
-
-            if (err < 0.0)
-                return slopePerSec >= _cfg.SlopeWrongDirectionEpsilon;  // 올라가면(반대) block
-
-            // err == 0 근처: 거의 정답이면 너무 민감하게 막지 말자
-            return Math.Abs(slopePerSec) > _cfg.SlopeTowardsTargetEpsilon;
-        }
-
-        private void UpdateWrongTrendGuard(double absErr, ChannelState st)
-        {
-            if (double.IsNaN(st.PrevErr))
-            {
-                st.WrongTrendCount = 0;
-                return;
-            }
-
-            double prevAbsErr = Math.Abs(st.PrevErr);
-            if (absErr > prevAbsErr + _cfg.ErrorTrendEpsilon)
-                st.WrongTrendCount++;
-            else
-                st.WrongTrendCount = 0;
-
-            if (st.WrongTrendCount >= _cfg.WrongTrendTriggerSamples)
-                st.Aggressiveness = Math.Max(0.5, st.Aggressiveness * _cfg.WrongTrendAggressivenessScale);
-        }
-
-        private void UpdateStallAggressiveness(DateTime now, double absErr, ChannelState st)
-        {
-            if (absErr >= _cfg.StallErrorThreshold)
-            {
-                if (st.LargeErrorStart == DateTime.MinValue)
-                    st.LargeErrorStart = now;
-
-                if ((now - st.LargeErrorStart).TotalSeconds >= _cfg.StallTimeSeconds)
-                {
-                    st.Aggressiveness = Math.Min(
-                        _cfg.MaxAggressivenessMultiplier,
-                        st.Aggressiveness * _cfg.StallAggressivenessMultiplier);
-                    st.LargeErrorStart = now;
-                }
+                st.CurrentBathOffset = targetOffset;
+                traceLog?.Invoke($"AUTO SMART CH{channel} write=OK reason={reason} target={targetOffset:F3}");
             }
             else
             {
-                st.LargeErrorStart = DateTime.MinValue;
-                st.Aggressiveness = Math.Max(1.0, st.Aggressiveness * 0.9);
+                traceLog?.Invoke($"AUTO SMART CH{channel} write=FAIL reason={reason} target={targetOffset:F3}");
             }
+            return ok;
         }
 
-        private (double step, double holdSec) GetStepAndHold(double absErr)
+        private double QuantizeClamp(double offset)
         {
-            if (absErr >= _cfg.AutoErrStepHigh)
-                return (_cfg.AutoStepHigh, _cfg.AutoHoldHighSeconds);
-
-            if (absErr >= _cfg.AutoErrStepMid)
-                return (_cfg.AutoStepMid, _cfg.AutoHoldMidSeconds);
-
-            if (absErr >= _cfg.AutoErrStepLow)
-                return (_cfg.AutoStepLow, _cfg.AutoHoldLowSeconds);
-
-            if (absErr >= _cfg.AutoErrDeadband)
-                return (_cfg.AutoStepFine, _cfg.AutoHoldFineSeconds);
-
-            return (0.0, _cfg.AutoHoldFineSeconds);
+            double clamped = OffsetMath.Clamp(offset, _cfg.OffsetClampMin, _cfg.OffsetClampMax);
+            return OffsetMath.Quantize(clamped, _cfg.OffsetStep);
         }
 
-        private static string utFmt(double ut)
+        private static int ToMilli(double tempC)
         {
-            return double.IsNaN(ut) ? "NaN" : ut.ToString("F4");
+            return (int)Math.Round(tempC * 1000.0, MidpointRounding.AwayFromZero);
         }
 
-        private static string dErrFmt(double dErr)
+        private static bool AreSameOffset(double a, double b)
         {
-            return double.IsNaN(dErr) ? "NaN" : dErr.ToString("F4");
-        }
-
-        private static string dUtFmt(double dUt)
-        {
-            return double.IsNaN(dUt) ? "NaN" : dUt.ToString("F4");
+            return Math.Abs(a - b) <= 1e-9;
         }
     }
 }
