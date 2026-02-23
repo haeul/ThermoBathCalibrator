@@ -78,6 +78,7 @@ namespace ThermoBathCalibrator
             pnlHeader.Name = "pnlHeader";
             pnlHeader.Size = new Size(1453, 65);
             pnlHeader.TabIndex = 0;
+            pnlHeader.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             // 
             // tlpSetting
             // 
@@ -92,6 +93,7 @@ namespace ThermoBathCalibrator
             tlpSetting.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             tlpSetting.Size = new Size(262, 59);
             tlpSetting.TabIndex = 4;
+            tlpSetting.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             // 
             // btnComSetting
             // 
@@ -104,6 +106,7 @@ namespace ThermoBathCalibrator
             btnComSetting.TabIndex = 3;
             btnComSetting.Text = "Port Setting";
             btnComSetting.UseVisualStyleBackColor = false;
+            btnComSetting.Dock = DockStyle.Fill;
             // 
             // lblHeader
             // 
@@ -125,10 +128,12 @@ namespace ThermoBathCalibrator
             pnlBacrground.Controls.Add(pnlHeader);
             pnlBacrground.Controls.Add(dataGridView1);
             pnlBacrground.Controls.Add(tlpCommStatus);
-            pnlBacrground.Location = new Point(6, 6);
+            pnlBacrground.Location = new Point(0, 0);
             pnlBacrground.Name = "pnlBacrground";
             pnlBacrground.Size = new Size(1471, 1300);
             pnlBacrground.TabIndex = 7;
+            pnlBacrground.Dock = DockStyle.Fill;
+            pnlBacrground.Margin = new Padding(0);
             // 
             // pnlCh2Graph
             // 
@@ -138,6 +143,7 @@ namespace ThermoBathCalibrator
             pnlCh2Graph.Name = "pnlCh2Graph";
             pnlCh2Graph.Size = new Size(720, 424);
             pnlCh2Graph.TabIndex = 10;
+            pnlCh2Graph.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             // 
             // pnlCh1Graph
             // 
@@ -147,6 +153,7 @@ namespace ThermoBathCalibrator
             pnlCh1Graph.Name = "pnlCh1Graph";
             pnlCh1Graph.Size = new Size(720, 424);
             pnlCh1Graph.TabIndex = 9;
+            pnlCh1Graph.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             // 
             // tlpbutton
             // 
@@ -183,6 +190,7 @@ namespace ThermoBathCalibrator
             tlpbutton.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
             tlpbutton.Size = new Size(1452, 101);
             tlpbutton.TabIndex = 7;
+            tlpbutton.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             // 
             // lblCh1
             // 
@@ -194,6 +202,7 @@ namespace ThermoBathCalibrator
             lblCh1.TabIndex = 15;
             lblCh1.Text = "CH1";
             lblCh1.TextAlign = ContentAlignment.MiddleCenter;
+            lblCh1.Dock = DockStyle.Fill;
             // 
             // lblCh1Temperature
             // 
@@ -205,6 +214,7 @@ namespace ThermoBathCalibrator
             lblCh1Temperature.TabIndex = 17;
             lblCh1Temperature.Text = "0";
             lblCh1Temperature.TextAlign = ContentAlignment.MiddleCenter;
+            lblCh1Temperature.Dock = DockStyle.Fill;
             // 
             // lblCh2
             // 
@@ -216,6 +226,7 @@ namespace ThermoBathCalibrator
             lblCh2.TabIndex = 16;
             lblCh2.Text = "CH2";
             lblCh2.TextAlign = ContentAlignment.MiddleCenter;
+            lblCh2.Dock = DockStyle.Fill;
             // 
             // lblCh2Temperature
             // 
@@ -227,6 +238,7 @@ namespace ThermoBathCalibrator
             lblCh2Temperature.TabIndex = 18;
             lblCh2Temperature.Text = "0";
             lblCh2Temperature.TextAlign = ContentAlignment.MiddleCenter;
+            lblCh2Temperature.Dock = DockStyle.Fill;
             // 
             // chkEnableOffsetControl
             // 
@@ -240,6 +252,7 @@ namespace ThermoBathCalibrator
             chkEnableOffsetControl.Text = "Offset 보정";
             chkEnableOffsetControl.TextAlign = ContentAlignment.MiddleCenter;
             chkEnableOffsetControl.UseVisualStyleBackColor = false;
+            chkEnableOffsetControl.Dock = DockStyle.Fill;
             // 
             // btnStart
             // 
@@ -250,6 +263,7 @@ namespace ThermoBathCalibrator
             btnStart.TabIndex = 13;
             btnStart.Text = "Start";
             btnStart.UseVisualStyleBackColor = true;
+            btnStart.Dock = DockStyle.Fill;
             // 
             // lblCh1OffsetTitle
             // 
@@ -261,6 +275,7 @@ namespace ThermoBathCalibrator
             lblCh1OffsetTitle.TabIndex = 19;
             lblCh1OffsetTitle.Text = "CH1 Off";
             lblCh1OffsetTitle.TextAlign = ContentAlignment.MiddleCenter;
+            lblCh1OffsetTitle.Dock = DockStyle.Fill;
             // 
             // lblCh1OffsetValue
             // 
@@ -272,6 +287,7 @@ namespace ThermoBathCalibrator
             lblCh1OffsetValue.TabIndex = 20;
             lblCh1OffsetValue.Text = "0.0";
             lblCh1OffsetValue.TextAlign = ContentAlignment.MiddleCenter;
+            lblCh1OffsetValue.Dock = DockStyle.Fill;
             // 
             // nudOffsetCh1
             // 
@@ -280,6 +296,7 @@ namespace ThermoBathCalibrator
             nudOffsetCh1.Name = "nudOffsetCh1";
             nudOffsetCh1.Size = new Size(152, 61);
             nudOffsetCh1.TabIndex = 11;
+            nudOffsetCh1.Dock = DockStyle.Fill;
             // 
             // btnOffsetApplyCh1
             // 
@@ -290,6 +307,7 @@ namespace ThermoBathCalibrator
             btnOffsetApplyCh1.TabIndex = 12;
             btnOffsetApplyCh1.Text = "Apply";
             btnOffsetApplyCh1.UseVisualStyleBackColor = true;
+            btnOffsetApplyCh1.Dock = DockStyle.Fill;
             // 
             // lblCh2OffsetTitle
             // 
@@ -301,6 +319,7 @@ namespace ThermoBathCalibrator
             lblCh2OffsetTitle.TabIndex = 21;
             lblCh2OffsetTitle.Text = "CH2 Off";
             lblCh2OffsetTitle.TextAlign = ContentAlignment.MiddleCenter;
+            lblCh2OffsetTitle.Dock = DockStyle.Fill;
             // 
             // lblCh2OffsetValue
             // 
@@ -312,6 +331,7 @@ namespace ThermoBathCalibrator
             lblCh2OffsetValue.TabIndex = 22;
             lblCh2OffsetValue.Text = "0.0";
             lblCh2OffsetValue.TextAlign = ContentAlignment.MiddleCenter;
+            lblCh2OffsetValue.Dock = DockStyle.Fill;
             // 
             // nudOffsetCh2
             // 
@@ -320,6 +340,7 @@ namespace ThermoBathCalibrator
             nudOffsetCh2.Name = "nudOffsetCh2";
             nudOffsetCh2.Size = new Size(152, 61);
             nudOffsetCh2.TabIndex = 23;
+            nudOffsetCh2.Dock = DockStyle.Fill;
             // 
             // btnOffsetApplyCh2
             // 
@@ -330,6 +351,7 @@ namespace ThermoBathCalibrator
             btnOffsetApplyCh2.TabIndex = 24;
             btnOffsetApplyCh2.Text = "Apply";
             btnOffsetApplyCh2.UseVisualStyleBackColor = true;
+            btnOffsetApplyCh2.Dock = DockStyle.Fill;
             // 
             // btnStop
             // 
@@ -340,6 +362,7 @@ namespace ThermoBathCalibrator
             btnStop.TabIndex = 14;
             btnStop.Text = "Stop";
             btnStop.UseVisualStyleBackColor = true;
+            btnStop.Dock = DockStyle.Fill;
             // 
             // dataGridView1
             // 
@@ -373,6 +396,7 @@ namespace ThermoBathCalibrator
             dataGridView1.RowHeadersWidth = 62;
             dataGridView1.Size = new Size(1452, 601);
             dataGridView1.TabIndex = 0;
+            dataGridView1.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             // 
             // colTimestamp
             // 
@@ -469,6 +493,7 @@ namespace ThermoBathCalibrator
             tlpCommStatus.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             tlpCommStatus.Size = new Size(1453, 36);
             tlpCommStatus.TabIndex = 8;
+            tlpCommStatus.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             // 
             // lblThermoPortStatus
             // 
@@ -485,8 +510,7 @@ namespace ThermoBathCalibrator
             // 
             // FormMain
             // 
-            AutoScaleDimensions = new SizeF(11F, 28F);
-            AutoScaleMode = AutoScaleMode.Font;
+            AutoScaleMode = AutoScaleMode.Dpi;
             ClientSize = new Size(1481, 1308);
             Controls.Add(pnlBacrground);
             Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
@@ -540,7 +564,7 @@ namespace ThermoBathCalibrator
         private NumericUpDown nudOffsetCh2;
         private Button btnOffsetApplyCh2;
 
-        // NEW: Offset enable checkbox
+        // Offset enable checkbox
         private CheckBox chkEnableOffsetControl;
 
         private DataGridViewTextBoxColumn colTimestamp;
