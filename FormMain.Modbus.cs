@@ -7,7 +7,7 @@ namespace ThermoBathCalibrator
 {
     public partial class FormMain
     {
-        // ✅ 추가: SV/Offset 분리 쓰기 구분용
+        // SV/Offset 분리 쓰기 구분용
         private enum WriteKind
         {
             SvOnly,
@@ -306,31 +306,33 @@ namespace ThermoBathCalibrator
             return true;
         }
 
-        // ✅ 변경: TryWriteChannelOffset에서 "Offset만" 쓰도록 분리 호출
+        // 변경: TryWriteChannelOffset에서 "Offset만" 쓰도록 분리 호출
         private bool TryWriteChannelOffset(int channel, double appliedOffset, string reason = "UNSPECIFIED")
         {
-            if (!_mb.IsConnected)
+            lock (_offsetWriteSequenceSync)
             {
-                _boardConnected = TryConnectWithCooldown();
-                if (!_boardConnected) _boardFailCount++;
-            }
+                if (!_mb.IsConnected)
+                {
+                    _boardConnected = TryConnectWithCooldown();
+                    if (!_boardConnected) _boardFailCount++;
+                }
 
-            if (!_mb.IsConnected)
-            {
-                _boardConnected = false;
-                TraceModbus($"OFFSET WRITE SKIP ch={channel} reason={reason} not_connected");
-                ShowOffsetApplyStatus(channel: channel, offset: appliedOffset, success: false);
-                return false;
-            }
+                if (!_mb.IsConnected)
+                {
+                    _boardConnected = false;
+                    TraceModbus($"OFFSET WRITE SKIP ch={channel} reason={reason} not_connected");
+                    ShowOffsetApplyStatus(channel: channel, offset: appliedOffset, success: false);
+                    return false;
+                }
 
-            appliedOffset = OffsetMath.Clamp(appliedOffset, _autoCfg.OffsetClampMin, _autoCfg.OffsetClampMax);
+                appliedOffset = OffsetMath.Clamp(appliedOffset, _autoCfg.OffsetClampMin, _autoCfg.OffsetClampMax);
 
-            short raw10 = (short)Math.Round(appliedOffset * 10.0, MidpointRounding.AwayFromZero);
-            ushort offsetWord = unchecked((ushort)raw10);
+                short raw10 = (short)Math.Round(appliedOffset * 10.0, MidpointRounding.AwayFromZero);
+                ushort offsetWord = unchecked((ushort)raw10);
 
-            if (channel == 1)
-            {
-                ushort svWord = unchecked((ushort)((short)Math.Round(_bath1Setpoint * 10.0, MidpointRounding.AwayFromZero)));
+                if (channel == 1)
+                {
+                    ushort svWord = unchecked((ushort)((short)Math.Round(_bath1Setpoint * 10.0, MidpointRounding.AwayFromZero)));
 
                 TraceModbus($"OFFSET WRITE TRY ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} (OFFSET-ONLY) svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
 
@@ -418,10 +420,11 @@ namespace ThermoBathCalibrator
                 return false;
             }
 
-            return false;
+                return false;
+            }
         }
 
-        // ✅ 추가: SV/Offset 분리 + cmd 펄스(0→cmd→0) 보장
+        // SV/Offset 분리 + cmd 펄스(0→cmd→0) 보장
         // - OffsetOnly면 offReg만 write
         // - SvOnly면 svReg만 write
         // - Command는 항상 0->cmd->0으로 내려준다 (로그/FC10으로 확인 가능)
@@ -503,9 +506,11 @@ namespace ThermoBathCalibrator
             }
             TraceModbus($"OFFSET CMD UP OK ch={channel} reason={reason} reg={cmdStart} cmd=0x{cmd:X4} kind={kind}");
 
-            // 3.5) cmd 펄스 마무리: cmd -> 0 (✅ 여기서 반드시 0으로 내림)
+            // 3.5) cmd 펄스 마무리: cmd -> 0 (여기서 반드시 0으로 내림)
             const int CmdPulseHoldMs = 120; // 필요 시 50~200ms 조절
             Thread.Sleep(CmdPulseHoldMs);
+
+            TraceModbus($"OFFSET CMD DOWN TRY ch={channel} reason={reason} reg={cmdStart} value=0x0000 holdMs={CmdPulseHoldMs}");
 
             if (!TryWriteSingleRegister(cmdStart, 0, out string errCmdDown))
             {
@@ -514,6 +519,11 @@ namespace ThermoBathCalibrator
                 return false;
             }
             TraceModbus($"OFFSET CMD DOWN OK ch={channel} reason={reason} reg={cmdStart} value=0x0000 holdMs={CmdPulseHoldMs}");
+
+            if (TryReadCommandRegister(channel, out ushort cmdReadback, out string errCmdReadback))
+                TraceModbus($"OFFSET CMD DOWN READBACK ch={channel} reason={reason} reg={cmdStart} value=0x{cmdReadback:X4} isZero={(cmdReadback == 0)}");
+            else
+                TraceModbus($"OFFSET CMD DOWN READBACK FAIL ch={channel} reason={reason} reg={cmdStart} err={errCmdReadback}");
 
             // 4) ACK 대기
             Thread.Sleep(AckInitialDelayMs);
@@ -529,7 +539,18 @@ namespace ThermoBathCalibrator
                     if (ackSet)
                     {
                         if (staleAck)
-                            TraceModbus($"OFFSET WRITE ACK STALE-ACCEPT ch={channel} reason={reason} before=0x{beforeResp:X4} now=0x{resp:X4} ackMask=0x{ackMask:X4}");
+                        {
+                            if (_allowStaleAck)
+                            {
+                                TraceModbus($"OFFSET WRITE ACK STALE-ACCEPT ch={channel} reason={reason} before=0x{beforeResp:X4} now=0x{resp:X4} ackMask=0x{ackMask:X4}");
+                            }
+                            else
+                            {
+                                TraceModbus($"OFFSET WRITE ACK STALE-REJECT ch={channel} reason={reason} before=0x{beforeResp:X4} now=0x{resp:X4} ackMask=0x{ackMask:X4}");
+                                Thread.Sleep(AckPollIntervalMs);
+                                continue;
+                            }
+                        }
 
                         TraceModbus($"OFFSET WRITE ACK OK ch={channel} reason={reason} kind={kind} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} ackResp=0x{resp:X4} ackMask=0x{ackMask:X4}");
                         return true;
@@ -607,6 +628,8 @@ namespace ThermoBathCalibrator
             const int CmdPulseHoldMs = 120; // 필요 시 50~200ms 범위로 조절
             Thread.Sleep(CmdPulseHoldMs);
 
+            TraceModbus($"OFFSET CMD DOWN TRY ch={channel} reason={reason} reg={cmdStart} value=0x0000 holdMs={CmdPulseHoldMs}");
+
             if (!TryWriteSingleRegister(cmdStart, 0, out string errCmdDown))
             {
                 error = $"CMD DOWN FAIL: {errCmdDown}";
@@ -614,6 +637,11 @@ namespace ThermoBathCalibrator
                 return false;
             }
             TraceModbus($"OFFSET CMD DOWN OK ch={channel} reason={reason} reg={cmdStart} value=0x0000 holdMs={CmdPulseHoldMs}");
+
+            if (TryReadCommandRegister(channel, out ushort cmdReadback, out string errCmdReadback))
+                TraceModbus($"OFFSET CMD DOWN READBACK ch={channel} reason={reason} reg={cmdStart} value=0x{cmdReadback:X4} isZero={(cmdReadback == 0)}");
+            else
+                TraceModbus($"OFFSET CMD DOWN READBACK FAIL ch={channel} reason={reason} reg={cmdStart} err={errCmdReadback}");
 
             // 4) ACK 대기
             Thread.Sleep(AckInitialDelayMs);
@@ -629,8 +657,18 @@ namespace ThermoBathCalibrator
                     if (ackSet)
                     {
                         if (staleAck)
-                            TraceModbus($"OFFSET WRITE ACK STALE-ACCEPT ch={channel} reason={reason} before=0x{beforeResp:X4} now=0x{resp:X4} ackMask=0x{ackMask:X4}");
-
+                        {
+                            if (_allowStaleAck)
+                            {
+                                TraceModbus($"OFFSET WRITE ACK STALE-ACCEPT ch={channel} reason={reason} before=0x{beforeResp:X4} now=0x{resp:X4} ackMask=0x{ackMask:X4}");
+                            }
+                            else
+                            {
+                                TraceModbus($"OFFSET WRITE ACK STALE-REJECT ch={channel} reason={reason} before=0x{beforeResp:X4} now=0x{resp:X4} ackMask=0x{ackMask:X4}");
+                                Thread.Sleep(AckPollIntervalMs);
+                                continue;
+                            }
+                        }
                         TraceModbus($"OFFSET WRITE ACK OK ch={channel} reason={reason} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} ackResp=0x{resp:X4} ackMask=0x{ackMask:X4}");
                         return true;
                     }
@@ -654,13 +692,38 @@ namespace ThermoBathCalibrator
 
             // FC10 count=1로 통일
             ushort[] payload = new ushort[] { value };
+            if (!_mb.IsConnected)
+            {
+                error = "Not connected.";
+                TraceModbus($"FC10 TRY start={start} values=[{value}] fail reason=not_connected");
+                return false;
+            }
+
+            TraceModbus($"FC10 TRY start={start} values=[{value}]");
             bool ok = _mb.TryWriteMultipleRegisters(start, payload, out string err);
             if (!ok)
+            {
+                error = err;
+                TraceModbus($"FC10 FAIL start={start} values=[{value}] err={err}");
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool TryReadCommandRegister(int channel, out ushort command, out string error)
+        {
+            command = 0;
+            error = string.Empty;
+
+            ushort cmdStart = channel == 1 ? RegCh1Command : RegCh2Command;
+            if (!_mb.TryReadHoldingRegisters(cmdStart, 1, out ushort[] regs, out string err))
             {
                 error = err;
                 return false;
             }
 
+            command = regs.Length > 0 ? regs[0] : (ushort)0;
             return true;
         }
 

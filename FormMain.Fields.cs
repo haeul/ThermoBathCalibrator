@@ -103,6 +103,12 @@ namespace ThermoBathCalibrator
         private const int AckPollIntervalMs = 100;
         private const int AckInitialDelayMs = 120;
 
+        // ACK stale 허용 여부 (진단 모드에서는 false로 두고 stale ACK 성공 처리 차단)
+        private bool _allowStaleAck = true;
+
+        // AUTO/MANUAL 동시 offset write 시퀀스(0->값->2->wait->0) 충돌 방지
+        private readonly object _offsetWriteSequenceSync = new object();
+
         private const double OffsetReadbackMismatchEpsilon = 0.049;
         private const double EnforceWriteIntervalSeconds = 1.0;
 
