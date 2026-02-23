@@ -112,7 +112,7 @@ namespace ThermoBathCalibrator
             lblHeader.ForeColor = SystemColors.ControlDarkDark;
             lblHeader.Location = new Point(612, 7);
             lblHeader.Name = "lblHeader";
-            lblHeader.Size = new Size(221, 45);
+            lblHeader.Size = new Size(329, 65);
             lblHeader.TabIndex = 1;
             lblHeader.Text = "데이터 수집기";
             // 
@@ -279,7 +279,7 @@ namespace ThermoBathCalibrator
             nudOffsetCh1.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
             nudOffsetCh1.Location = new Point(322, 54);
             nudOffsetCh1.Name = "nudOffsetCh1";
-            nudOffsetCh1.Size = new Size(152, 43);
+            nudOffsetCh1.Size = new Size(152, 61);
             nudOffsetCh1.TabIndex = 11;
             // 
             // btnOffsetApplyCh1
@@ -319,7 +319,7 @@ namespace ThermoBathCalibrator
             nudOffsetCh2.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
             nudOffsetCh2.Location = new Point(958, 54);
             nudOffsetCh2.Name = "nudOffsetCh2";
-            nudOffsetCh2.Size = new Size(152, 43);
+            nudOffsetCh2.Size = new Size(152, 61);
             nudOffsetCh2.TabIndex = 23;
             // 
             // btnOffsetApplyCh2
@@ -371,6 +371,7 @@ namespace ThermoBathCalibrator
             dataGridView1.Name = "dataGridView1";
             dataGridView1.ReadOnly = true;
             dataGridView1.RowHeadersVisible = false;
+            dataGridView1.RowHeadersWidth = 62;
             dataGridView1.Size = new Size(1452, 601);
             dataGridView1.TabIndex = 0;
             // 
@@ -387,6 +388,7 @@ namespace ThermoBathCalibrator
             // colUtCh1
             // 
             colUtCh1.HeaderText = "UT1";
+            colUtCh1.MinimumWidth = 8;
             colUtCh1.Name = "colUtCh1";
             colUtCh1.ReadOnly = true;
             colUtCh1.Width = 130;
@@ -394,6 +396,7 @@ namespace ThermoBathCalibrator
             // colUtCh2
             // 
             colUtCh2.HeaderText = "UT2";
+            colUtCh2.MinimumWidth = 8;
             colUtCh2.Name = "colUtCh2";
             colUtCh2.ReadOnly = true;
             colUtCh2.Width = 130;
@@ -401,6 +404,7 @@ namespace ThermoBathCalibrator
             // colUtTj
             // 
             colUtTj.HeaderText = "TJ";
+            colUtTj.MinimumWidth = 8;
             colUtTj.Name = "colUtTj";
             colUtTj.ReadOnly = true;
             colUtTj.Width = 130;
@@ -408,6 +412,7 @@ namespace ThermoBathCalibrator
             // colBath1Pv
             // 
             colBath1Pv.HeaderText = "B1 PV";
+            colBath1Pv.MinimumWidth = 8;
             colBath1Pv.Name = "colBath1Pv";
             colBath1Pv.ReadOnly = true;
             colBath1Pv.Width = 130;
@@ -415,6 +420,7 @@ namespace ThermoBathCalibrator
             // colBath2Pv
             // 
             colBath2Pv.HeaderText = "B2 PV";
+            colBath2Pv.MinimumWidth = 8;
             colBath2Pv.Name = "colBath2Pv";
             colBath2Pv.ReadOnly = true;
             colBath2Pv.Width = 130;
@@ -422,6 +428,7 @@ namespace ThermoBathCalibrator
             // colErr1
             // 
             colErr1.HeaderText = "Err1";
+            colErr1.MinimumWidth = 8;
             colErr1.Name = "colErr1";
             colErr1.ReadOnly = true;
             colErr1.Width = 130;
@@ -429,6 +436,7 @@ namespace ThermoBathCalibrator
             // colErr2
             // 
             colErr2.HeaderText = "Err2";
+            colErr2.MinimumWidth = 8;
             colErr2.Name = "colErr2";
             colErr2.ReadOnly = true;
             colErr2.Width = 130;
@@ -436,6 +444,7 @@ namespace ThermoBathCalibrator
             // colBath1SetTemp
             // 
             colBath1SetTemp.HeaderText = "B1 Set";
+            colBath1SetTemp.MinimumWidth = 8;
             colBath1SetTemp.Name = "colBath1SetTemp";
             colBath1SetTemp.ReadOnly = true;
             colBath1SetTemp.Width = 130;
@@ -443,6 +452,7 @@ namespace ThermoBathCalibrator
             // colBath2SetTemp
             // 
             colBath2SetTemp.HeaderText = "B2 Set";
+            colBath2SetTemp.MinimumWidth = 8;
             colBath2SetTemp.Name = "colBath2SetTemp";
             colBath2SetTemp.ReadOnly = true;
             colBath2SetTemp.Width = 130;
@@ -476,7 +486,7 @@ namespace ThermoBathCalibrator
             // 
             // FormMain
             // 
-            AutoScaleDimensions = new SizeF(7F, 17F);
+            AutoScaleDimensions = new SizeF(11F, 28F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(1481, 1308);
             Controls.Add(pnlBacrground);

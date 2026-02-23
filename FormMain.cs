@@ -62,6 +62,24 @@ namespace ThermoBathCalibrator
 
             PrepareCsvPath(DateTime.Now);
 
+            _offsetStatusTimer = new System.Windows.Forms.Timer();
+            _offsetStatusTimer.Interval = 100;
+            _offsetStatusTimer.Tick += (s, e) =>
+            {
+                bool stillVisible;
+                lock (_offsetStatusSync)
+                {
+                    stillVisible = DateTime.UtcNow <= _offsetApplyStatusUntilUtc;
+                }
+
+                if (!stillVisible)
+                {
+                    _offsetStatusTimer?.Stop();
+                }
+
+                UpdateStatusLabels();
+            };
+
             // 체크박스 상태에 따라 UI 잠금 반영
             ApplyOffsetControlUiLock();
         }
@@ -283,14 +301,56 @@ namespace ThermoBathCalibrator
             lblCh2Temperature.Text = double.IsNaN(ch2) ? "-" : ch2.ToString("0.000", CultureInfo.InvariantCulture);
         }
 
+        private void ShowOffsetApplyStatus(int channel, double offset, bool success)
+        {
+            string msg = success
+                ? $"CH{channel} Offset {offset.ToString("0.0", CultureInfo.InvariantCulture)} 적용"
+                : $"CH{channel} Offset {offset.ToString("0.0", CultureInfo.InvariantCulture)} 적용 실패";
+
+            Color color = success ? Color.DeepSkyBlue : Color.OrangeRed;
+
+            lock (_offsetStatusSync)
+            {
+                _offsetApplyStatusText = msg;
+                _offsetApplyStatusColor = color;
+                _offsetApplyStatusUntilUtc = DateTime.UtcNow.AddSeconds(1);
+            }
+
+            if (IsHandleCreated)
+            {
+                BeginInvoke(new Action(() =>
+                {
+                    _offsetStatusTimer?.Stop();
+                    _offsetStatusTimer?.Start();
+                    UpdateStatusLabels();
+                }));
+            }
+        }
+
         private void UpdateStatusLabels()
         {
+            bool showOffsetStatus;
+            string offsetStatusText;
+            Color offsetStatusColor;
+            lock (_offsetStatusSync)
+            {
+                showOffsetStatus = DateTime.UtcNow <= _offsetApplyStatusUntilUtc && !string.IsNullOrWhiteSpace(_offsetApplyStatusText);
+                offsetStatusText = _offsetApplyStatusText;
+                offsetStatusColor = _offsetApplyStatusColor;
+            }
+
+            if (showOffsetStatus)
+            {
+                lblThermoPortStatus.Text = offsetStatusText;
+                lblThermoPortStatus.ForeColor = offsetStatusColor;
+                return;
+            }
+
             lblThermoPortStatus.Text =
                 $"BOARD({_host}:{_port}): {(_boardConnected ? "CONNECTED" : "DISCONNECTED")} (fail={_boardFailCount})";
 
             lblThermoPortStatus.ForeColor = _boardConnected ? Color.LimeGreen : Color.OrangeRed;
         }
-
         // ===========================================================
         // IMPORTANT: LoopOnceCore() 내부에서 "자동 write" 분기 필요
         // ===========================================================

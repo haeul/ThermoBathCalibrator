@@ -105,5 +105,12 @@ namespace ThermoBathCalibrator
 
         private const double OffsetReadbackMismatchEpsilon = 0.049;
         private const double EnforceWriteIntervalSeconds = 1.0;
+
+        // offset 적용 상태를 1초간 상태바에 표시
+        private readonly object _offsetStatusSync = new object();
+        private DateTime _offsetApplyStatusUntilUtc = DateTime.MinValue;
+        private string _offsetApplyStatusText = string.Empty;
+        private System.Drawing.Color _offsetApplyStatusColor = System.Drawing.Color.DeepSkyBlue;
+        private System.Windows.Forms.Timer? _offsetStatusTimer;
     }
 }

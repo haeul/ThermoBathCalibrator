@@ -311,6 +311,7 @@ namespace ThermoBathCalibrator
             {
                 _boardConnected = false;
                 TraceModbus($"OFFSET WRITE SKIP ch={channel} reason={reason} not_connected");
+                ShowOffsetApplyStatus(channel: channel, offset: appliedOffset, success: false);
                 return false;
             }
 
@@ -328,29 +329,32 @@ namespace ThermoBathCalibrator
 
                 TraceModbus($"OFFSET WRITE TRY ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} cmd=0x{cmd:X4} svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
                 bool ok = TryWriteAndWaitAck(channel: 1, cmd: cmd, svWord: svWord, offsetWord: offsetWord, reason: reason, desiredOffset: appliedOffset, raw10: raw10, out string errWriteAndAck);
-                if (ok)
-                {
-                    if (TryReadbackAfterWrite(channel: 1, desiredOffset: appliedOffset, out double readback))
-                    {
-                        lock (_offsetStateSync)
-                        {
-                            _bath1OffsetCur = readback;
-                        }
-                        _lastWrittenOffsetCh1 = readback;
-                    }
-                    else
-                    {
-                        _lastWrittenOffsetCh1 = appliedOffset;
-                    }
-
-                    _lastWriteCh1 = DateTime.Now;
-                    BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
-                }
-                else
+                if (!ok)
                 {
                     TraceModbus($"OFFSET WRITE FAIL ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
+                    ShowOffsetApplyStatus(channel: 1, offset: appliedOffset, success: false);
+                    return false;
                 }
-                return ok;
+
+                bool verified = TryReadbackAfterWrite(channel: 1, desiredOffset: appliedOffset, out double readback);
+                if (verified)
+                {
+                    lock (_offsetStateSync)
+                    {
+                        _bath1OffsetCur = readback;
+                    }
+
+                    _lastWrittenOffsetCh1 = readback;
+                    _lastWriteCh1 = DateTime.Now;
+                    ShowOffsetApplyStatus(channel: 1, offset: readback, success: true);
+                    BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
+                    return true;
+                }
+
+                _lastWrittenOffsetCh1 = appliedOffset;
+                ShowOffsetApplyStatus(channel: 1, offset: appliedOffset, success: false);
+                TraceModbus($"OFFSET APPLY FAIL ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} readback_timeout");
+                return false;
             }
 
             if (channel == 2)
@@ -362,29 +366,32 @@ namespace ThermoBathCalibrator
 
                 TraceModbus($"OFFSET WRITE TRY ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} cmd=0x{cmd:X4} svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
                 bool ok = TryWriteAndWaitAck(channel: 2, cmd: cmd, svWord: svWord, offsetWord: offsetWord, reason: reason, desiredOffset: appliedOffset, raw10: raw10, out string errWriteAndAck);
-                if (ok)
-                {
-                    if (TryReadbackAfterWrite(channel: 2, desiredOffset: appliedOffset, out double readback))
-                    {
-                        lock (_offsetStateSync)
-                        {
-                            _bath2OffsetCur = readback;
-                        }
-                        _lastWrittenOffsetCh2 = readback;
-                    }
-                    else
-                    {
-                        _lastWrittenOffsetCh2 = appliedOffset;
-                    }
-
-                    _lastWriteCh2 = DateTime.Now;
-                    BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
-                }
-                else
+                if (!ok)
                 {
                     TraceModbus($"OFFSET WRITE FAIL ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
+                    ShowOffsetApplyStatus(channel: 2, offset: appliedOffset, success: false);
+                    return false;
                 }
-                return ok;
+
+                bool verified = TryReadbackAfterWrite(channel: 2, desiredOffset: appliedOffset, out double readback);
+                if (verified)
+                {
+                    lock (_offsetStateSync)
+                    {
+                        _bath2OffsetCur = readback;
+                    }
+
+                    _lastWrittenOffsetCh2 = readback;
+                    _lastWriteCh2 = DateTime.Now;
+                    ShowOffsetApplyStatus(channel: 2, offset: readback, success: true);
+                    BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
+                    return true;
+                }
+
+                _lastWrittenOffsetCh2 = appliedOffset;
+                ShowOffsetApplyStatus(channel: 2, offset: appliedOffset, success: false);
+                TraceModbus($"OFFSET APPLY FAIL ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} readback_timeout");
+                return false;
             }
 
             return false;
