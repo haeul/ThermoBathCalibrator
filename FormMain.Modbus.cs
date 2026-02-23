@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Globalization;
+using System.Linq;
 using System.Threading;
 using ThermoBathCalibrator.Controller;
 
@@ -306,124 +307,175 @@ namespace ThermoBathCalibrator
             return true;
         }
 
-        // 변경: TryWriteChannelOffset에서 "Offset만" 쓰도록 분리 호출
+        // WRITE QUEUE PATCH START
         private bool TryWriteChannelOffset(int channel, double appliedOffset, string reason = "UNSPECIFIED")
+        {
+            string source = reason != null && reason.IndexOf("MANUAL", StringComparison.OrdinalIgnoreCase) >= 0
+                ? "MANUAL"
+                : "AUTO";
+
+            if (source == "AUTO")
+            {
+                bool existsSameChannel = _writeQueue.Any(q => q.Channel == channel);
+                if (existsSameChannel)
+                {
+                    TraceModbus($"[QUEUE ENQUEUE] src=AUTO ch={channel} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} skip=duplicate");
+                    return true;
+                }
+            }
+
+            if (source == "MANUAL")
+            {
+                RemovePendingAutoRequestsForChannel(channel);
+            }
+
+            var request = new OffsetWriteRequest
+            {
+                Channel = channel,
+                DesiredOffset = appliedOffset,
+                Source = source,
+                RequestedAt = DateTime.Now
+            };
+
+            _writeQueue.Enqueue(request);
+            _writeSignal.Set();
+            TraceModbus($"[QUEUE ENQUEUE] src={request.Source} ch={request.Channel} desired={request.DesiredOffset.ToString("0.0", CultureInfo.InvariantCulture)}");
+            return true;
+        }
+
+        private void RemovePendingAutoRequestsForChannel(int channel)
+        {
+            if (_writeQueue.IsEmpty) return;
+
+            var kept = new System.Collections.Generic.List<OffsetWriteRequest>();
+            while (_writeQueue.TryDequeue(out OffsetWriteRequest pending))
+            {
+                bool remove = pending.Channel == channel && string.Equals(pending.Source, "AUTO", StringComparison.OrdinalIgnoreCase);
+                if (remove)
+                {
+                    TraceModbus($"[QUEUE ENQUEUE] src=MANUAL ch={channel} droppedPendingAutoAt={pending.RequestedAt:O}");
+                    continue;
+                }
+
+                kept.Add(pending);
+            }
+
+            foreach (OffsetWriteRequest req in kept)
+                _writeQueue.Enqueue(req);
+        }
+
+        private bool TryDequeueAndExecuteWriteRequest()
+        {
+            if (!_writeQueue.TryDequeue(out OffsetWriteRequest request))
+                return false;
+
+            TraceModbus($"[QUEUE DEQUEUE] src={request.Source} ch={request.Channel} desired={request.DesiredOffset.ToString("0.0", CultureInfo.InvariantCulture)}");
+            return ExecuteOffsetWriteRequest(request);
+        }
+
+        private bool ExecuteOffsetWriteRequest(OffsetWriteRequest request)
         {
             lock (_offsetWriteSequenceSync)
             {
-                if (!_mb.IsConnected)
+                _inWriteSequence = true;
+                try
                 {
-                    _boardConnected = TryConnectWithCooldown();
-                    if (!_boardConnected) _boardFailCount++;
-                }
-
-                if (!_mb.IsConnected)
-                {
-                    _boardConnected = false;
-                    TraceModbus($"OFFSET WRITE SKIP ch={channel} reason={reason} not_connected");
-                    ShowOffsetApplyStatus(channel: channel, offset: appliedOffset, success: false);
-                    return false;
-                }
-
-                appliedOffset = OffsetMath.Clamp(appliedOffset, _autoCfg.OffsetClampMin, _autoCfg.OffsetClampMax);
-
-                short raw10 = (short)Math.Round(appliedOffset * 10.0, MidpointRounding.AwayFromZero);
-                ushort offsetWord = unchecked((ushort)raw10);
-
-                if (channel == 1)
-                {
-                    ushort svWord = unchecked((ushort)((short)Math.Round(_bath1Setpoint * 10.0, MidpointRounding.AwayFromZero)));
-
-                TraceModbus($"OFFSET WRITE TRY ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} (OFFSET-ONLY) svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
-
-                bool ok = TryWriteAndWaitAck_Split(
-                    channel: 1,
-                    kind: WriteKind.OffsetOnly,
-                    svWord: svWord,
-                    offsetWord: offsetWord,
-                    reason: reason,
-                    desiredOffset: appliedOffset,
-                    raw10: raw10,
-                    out string errWriteAndAck
-                );
-
-                if (!ok)
-                {
-                    TraceModbus($"OFFSET WRITE FAIL ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
-                    ShowOffsetApplyStatus(channel: 1, offset: appliedOffset, success: false);
-                    return false;
-                }
-
-                bool verified = TryReadbackAfterWrite(channel: 1, desiredOffset: appliedOffset, out double readback);
-                if (verified)
-                {
-                    lock (_offsetStateSync)
+                    if (!_mb.IsConnected)
                     {
-                        _bath1OffsetCur = readback;
+                        _boardConnected = TryConnectWithCooldown();
+                        if (!_boardConnected) _boardFailCount++;
                     }
 
-                    _lastWrittenOffsetCh1 = readback;
-                    _lastWriteCh1 = DateTime.Now;
-                    ShowOffsetApplyStatus(channel: 1, offset: readback, success: true);
-                    BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
-                    return true;
-                }
-
-                _lastWrittenOffsetCh1 = appliedOffset;
-                ShowOffsetApplyStatus(channel: 1, offset: appliedOffset, success: false);
-                TraceModbus($"OFFSET APPLY FAIL ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} readback_timeout");
-                return false;
-            }
-
-            if (channel == 2)
-            {
-                ushort svWord = unchecked((ushort)((short)Math.Round(_bath2Setpoint * 10.0, MidpointRounding.AwayFromZero)));
-
-                TraceModbus($"OFFSET WRITE TRY ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} (OFFSET-ONLY) svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
-
-                bool ok = TryWriteAndWaitAck_Split(
-                    channel: 2,
-                    kind: WriteKind.OffsetOnly,
-                    svWord: svWord,
-                    offsetWord: offsetWord,
-                    reason: reason,
-                    desiredOffset: appliedOffset,
-                    raw10: raw10,
-                    out string errWriteAndAck
-                );
-
-                if (!ok)
-                {
-                    TraceModbus($"OFFSET WRITE FAIL ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
-                    ShowOffsetApplyStatus(channel: 2, offset: appliedOffset, success: false);
-                    return false;
-                }
-
-                bool verified = TryReadbackAfterWrite(channel: 2, desiredOffset: appliedOffset, out double readback);
-                if (verified)
-                {
-                    lock (_offsetStateSync)
+                    if (!_mb.IsConnected)
                     {
-                        _bath2OffsetCur = readback;
+                        _boardConnected = false;
+                        TraceModbus($"[WRITE EXECUTE] src={request.Source} ch={request.Channel} desired={request.DesiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} result=skip_not_connected");
+                        ShowOffsetApplyStatus(channel: request.Channel, offset: request.DesiredOffset, success: false);
+                        return false;
                     }
 
-                    _lastWrittenOffsetCh2 = readback;
-                    _lastWriteCh2 = DateTime.Now;
-                    ShowOffsetApplyStatus(channel: 2, offset: readback, success: true);
-                    BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
-                    return true;
+                    double appliedOffset = OffsetMath.Clamp(request.DesiredOffset, _autoCfg.OffsetClampMin, _autoCfg.OffsetClampMax);
+                    short raw10 = (short)Math.Round(appliedOffset * 10.0, MidpointRounding.AwayFromZero);
+                    ushort offsetWord = unchecked((ushort)raw10);
+                    ushort cmdStart = request.Channel == 1 ? RegCh1Command : RegCh2Command;
+                    ushort offReg = (ushort)(cmdStart + 2);
+                    const int holdMs = 120;
+
+                    TraceModbus($"[WRITE EXECUTE] src={request.Source} ch={request.Channel} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} step=cmd_clear");
+                    if (!TryWriteSingleRegister(cmdStart, 0, out string errClear))
+                    {
+                        TraceModbus($"[WRITE EXECUTE] src={request.Source} ch={request.Channel} step=cmd_clear fail err={errClear}");
+                        ShowOffsetApplyStatus(channel: request.Channel, offset: appliedOffset, success: false);
+                        return false;
+                    }
+
+                    TraceModbus($"[WRITE EXECUTE] src={request.Source} ch={request.Channel} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} step=offset_write reg={offReg}");
+                    if (!TryWriteSingleRegister(offReg, offsetWord, out string errOffWrite))
+                    {
+                        TraceModbus($"[WRITE EXECUTE] src={request.Source} ch={request.Channel} step=offset_write fail err={errOffWrite}");
+                        ShowOffsetApplyStatus(channel: request.Channel, offset: appliedOffset, success: false);
+                        return false;
+                    }
+
+                    TraceModbus($"[WRITE EXECUTE] src={request.Source} ch={request.Channel} step=cmd_up");
+                    if (!TryWriteSingleRegister(cmdStart, 0x0002, out string errCmdUp))
+                    {
+                        TraceModbus($"[WRITE EXECUTE] src={request.Source} ch={request.Channel} step=cmd_up fail err={errCmdUp}");
+                        ShowOffsetApplyStatus(channel: request.Channel, offset: appliedOffset, success: false);
+                        return false;
+                    }
+
+                    Thread.Sleep(holdMs);
+
+                    TraceModbus($"[WRITE EXECUTE] src={request.Source} ch={request.Channel} step=cmd_down holdMs={holdMs}");
+                    if (!TryWriteSingleRegister(cmdStart, 0, out string errCmdDown))
+                    {
+                        TraceModbus($"[WRITE EXECUTE] src={request.Source} ch={request.Channel} step=cmd_down fail err={errCmdDown}");
+                        ShowOffsetApplyStatus(channel: request.Channel, offset: appliedOffset, success: false);
+                        return false;
+                    }
+
+                    bool verified = TryReadbackAfterWrite(channel: request.Channel, desiredOffset: appliedOffset, out double readback);
+                    bool success = verified && Math.Abs(readback - appliedOffset) <= OffsetReadbackMismatchEpsilon;
+                    TraceModbus($"[WRITE VERIFY] src={request.Source} ch={request.Channel} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} readback={readback.ToString("0.0", CultureInfo.InvariantCulture)} success={success}");
+
+                    if (success)
+                    {
+                        lock (_offsetStateSync)
+                        {
+                            if (request.Channel == 1) _bath1OffsetCur = readback;
+                            else if (request.Channel == 2) _bath2OffsetCur = readback;
+                        }
+
+                        if (request.Channel == 1)
+                        {
+                            _lastWrittenOffsetCh1 = readback;
+                            _lastWriteCh1 = DateTime.Now;
+                        }
+                        else if (request.Channel == 2)
+                        {
+                            _lastWrittenOffsetCh2 = readback;
+                            _lastWriteCh2 = DateTime.Now;
+                        }
+
+                        ShowOffsetApplyStatus(channel: request.Channel, offset: readback, success: true);
+                        BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
+                        return true;
+                    }
+
+                    if (request.Channel == 1) _lastWrittenOffsetCh1 = appliedOffset;
+                    else if (request.Channel == 2) _lastWrittenOffsetCh2 = appliedOffset;
+
+                    ShowOffsetApplyStatus(channel: request.Channel, offset: appliedOffset, success: false);
+                    return false;
                 }
-
-                _lastWrittenOffsetCh2 = appliedOffset;
-                ShowOffsetApplyStatus(channel: 2, offset: appliedOffset, success: false);
-                TraceModbus($"OFFSET APPLY FAIL ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} readback_timeout");
-                return false;
-            }
-
-                return false;
+                finally
+                {
+                    _inWriteSequence = false;
+                }
             }
         }
-
+        // WRITE QUEUE PATCH END
         // SV/Offset 분리 + cmd 펄스(0→cmd→0) 보장
         // - OffsetOnly면 offReg만 write
         // - SvOnly면 svReg만 write

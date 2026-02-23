@@ -109,6 +109,12 @@ namespace ThermoBathCalibrator
         // AUTO/MANUAL 동시 offset write 시퀀스(0->값->2->wait->0) 충돌 방지
         private readonly object _offsetWriteSequenceSync = new object();
 
+        // WRITE QUEUE PATCH START
+        private readonly System.Collections.Concurrent.ConcurrentQueue<OffsetWriteRequest> _writeQueue = new System.Collections.Concurrent.ConcurrentQueue<OffsetWriteRequest>();
+        private readonly System.Threading.AutoResetEvent _writeSignal = new System.Threading.AutoResetEvent(false);
+        private volatile bool _inWriteSequence;
+
+        // WRITE QUEUE PATCH END
         private const double OffsetReadbackMismatchEpsilon = 0.049;
         private const double EnforceWriteIntervalSeconds = 1.0;
 

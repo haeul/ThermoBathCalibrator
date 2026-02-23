@@ -23,6 +23,16 @@ namespace ThermoBathCalibrator
             public double Tj;
         }
 
+        // WRITE QUEUE PATCH START
+        private sealed class OffsetWriteRequest
+        {
+            public int Channel;
+            public double DesiredOffset;
+            public string Source = string.Empty; // AUTO or MANUAL
+            public DateTime RequestedAt;
+        }
+
+        // WRITE QUEUE PATCH END
         private sealed class SampleRow
         {
             public DateTime Timestamp { get; set; }

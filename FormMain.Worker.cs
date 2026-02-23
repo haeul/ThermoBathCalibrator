@@ -52,7 +52,7 @@ namespace ThermoBathCalibrator
 
                 int sleepMs = 1000 - (int)(DateTime.Now - started).TotalMilliseconds;
                 if (sleepMs < 1) sleepMs = 1;
-                Thread.Sleep(sleepMs);
+                _writeSignal.WaitOne(sleepMs);
             }
         }
 
@@ -79,8 +79,23 @@ namespace ThermoBathCalibrator
 
             PrepareCsvPath(now);
 
-            bool readOk = TryReadMultiBoard(out MultiBoardSnapshot snap, out bool stale);
+            // WRITE QUEUE PATCH START
+            bool stale = false;
+            MultiBoardSnapshot snap = default;
 
+            if (!_writeQueue.IsEmpty)
+            {
+                _ = TryDequeueAndExecuteWriteRequest();
+            }
+
+            bool canReadPoll = _writeQueue.IsEmpty && !_inWriteSequence;
+            bool readOk = false;
+            if (canReadPoll)
+            {
+                TraceModbus("[READ POLL]");
+                readOk = TryReadMultiBoard(out snap, out stale);
+            }
+            // WRITE QUEUE PATCH END
             double utCh1Raw = readOk ? snap.Ch1ExternalThermo : double.NaN;
             double utCh2Raw = readOk ? snap.Ch2ExternalThermo : double.NaN;
 
