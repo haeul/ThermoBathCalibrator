@@ -99,6 +99,14 @@ namespace ThermoBathCalibrator
             snap = default;
             stale = false;
 
+            // FIELD PATCH START
+            if (_inWriteSequence)
+            {
+                TraceModbus("READ POLL SKIP reason=in_write_sequence");
+                return false;
+            }
+            // FIELD PATCH END
+
             if (!_mb.IsConnected)
             {
                 _boardConnected = TryConnectWithCooldown();
@@ -307,127 +315,142 @@ namespace ThermoBathCalibrator
         }
 
         // 변경: TryWriteChannelOffset에서 "Offset만" 쓰도록 분리 호출
+        // FIELD PATCH START
         private bool TryWriteChannelOffset(int channel, double appliedOffset, string reason = "UNSPECIFIED")
         {
             lock (_offsetWriteSequenceSync)
             {
-                if (!_mb.IsConnected)
+                _inWriteSequence = true;
+                try
                 {
-                    _boardConnected = TryConnectWithCooldown();
-                    if (!_boardConnected) _boardFailCount++;
-                }
-
-                if (!_mb.IsConnected)
-                {
-                    _boardConnected = false;
-                    TraceModbus($"OFFSET WRITE SKIP ch={channel} reason={reason} not_connected");
-                    ShowOffsetApplyStatus(channel: channel, offset: appliedOffset, success: false);
-                    return false;
-                }
-
-                appliedOffset = OffsetMath.Clamp(appliedOffset, _autoCfg.OffsetClampMin, _autoCfg.OffsetClampMax);
-
-                short raw10 = (short)Math.Round(appliedOffset * 10.0, MidpointRounding.AwayFromZero);
-                ushort offsetWord = unchecked((ushort)raw10);
-
-                if (channel == 1)
-                {
-                    ushort svWord = unchecked((ushort)((short)Math.Round(_bath1Setpoint * 10.0, MidpointRounding.AwayFromZero)));
-
-                TraceModbus($"OFFSET WRITE TRY ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} (OFFSET-ONLY) svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
-
-                bool ok = TryWriteAndWaitAck_Split(
-                    channel: 1,
-                    kind: WriteKind.OffsetOnly,
-                    svWord: svWord,
-                    offsetWord: offsetWord,
-                    reason: reason,
-                    desiredOffset: appliedOffset,
-                    raw10: raw10,
-                    out string errWriteAndAck
-                );
-
-                if (!ok)
-                {
-                    TraceModbus($"OFFSET WRITE FAIL ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
-                    ShowOffsetApplyStatus(channel: 1, offset: appliedOffset, success: false);
-                    return false;
-                }
-
-                bool verified = TryReadbackAfterWrite(channel: 1, desiredOffset: appliedOffset, out double readback);
-                if (verified)
-                {
-                    lock (_offsetStateSync)
+                    if (!_mb.IsConnected)
                     {
-                        _bath1OffsetCur = readback;
+                        _boardConnected = TryConnectWithCooldown();
+                        if (!_boardConnected) _boardFailCount++;
                     }
 
-                    _lastWrittenOffsetCh1 = readback;
-                    _lastWriteCh1 = DateTime.Now;
-                    ShowOffsetApplyStatus(channel: 1, offset: readback, success: true);
-                    BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
-                    return true;
-                }
-
-                _lastWrittenOffsetCh1 = appliedOffset;
-                ShowOffsetApplyStatus(channel: 1, offset: appliedOffset, success: false);
-                TraceModbus($"OFFSET APPLY FAIL ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} readback_timeout");
-                return false;
-            }
-
-            if (channel == 2)
-            {
-                ushort svWord = unchecked((ushort)((short)Math.Round(_bath2Setpoint * 10.0, MidpointRounding.AwayFromZero)));
-
-                TraceModbus($"OFFSET WRITE TRY ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} (OFFSET-ONLY) svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
-
-                bool ok = TryWriteAndWaitAck_Split(
-                    channel: 2,
-                    kind: WriteKind.OffsetOnly,
-                    svWord: svWord,
-                    offsetWord: offsetWord,
-                    reason: reason,
-                    desiredOffset: appliedOffset,
-                    raw10: raw10,
-                    out string errWriteAndAck
-                );
-
-                if (!ok)
-                {
-                    TraceModbus($"OFFSET WRITE FAIL ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
-                    ShowOffsetApplyStatus(channel: 2, offset: appliedOffset, success: false);
-                    return false;
-                }
-
-                bool verified = TryReadbackAfterWrite(channel: 2, desiredOffset: appliedOffset, out double readback);
-                if (verified)
-                {
-                    lock (_offsetStateSync)
+                    if (!_mb.IsConnected)
                     {
-                        _bath2OffsetCur = readback;
+                        _boardConnected = false;
+                        TraceModbus($"[WRITE RESULT] FAIL reason=not_connected src={reason} channel={channel}");
+                        ShowOffsetApplyStatus(channel: channel, offset: appliedOffset, success: false);
+                        return false;
                     }
 
-                    _lastWrittenOffsetCh2 = readback;
-                    _lastWriteCh2 = DateTime.Now;
-                    ShowOffsetApplyStatus(channel: 2, offset: readback, success: true);
+                    appliedOffset = OffsetMath.Clamp(appliedOffset, _autoCfg.OffsetClampMin, _autoCfg.OffsetClampMax);
+
+                    short raw10 = (short)Math.Round(appliedOffset * 10.0, MidpointRounding.AwayFromZero);
+                    ushort offsetWord = unchecked((ushort)raw10);
+
+                    double currentRead = channel == 1 ? _bath1OffsetCur : _bath2OffsetCur;
+                    string src = reason != null && reason.StartsWith("MANUAL", StringComparison.OrdinalIgnoreCase) ? "MANUAL" : "AUTO";
+                    TraceModbus($"[WRITE START] src={src} channel={channel} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} currentRead={currentRead.ToString("0.0", CultureInfo.InvariantCulture)} thread={Thread.CurrentThread.ManagedThreadId}");
+                    TraceModbus("[INFO] ACK disabled - using readback verification only");
+
+                    if (!TryWriteOffsetSequenceNoAck(channel, offsetWord, reason, raw10, out string sequenceErr))
+                    {
+                        TraceModbus($"[WRITE RESULT] FAIL reason={sequenceErr} src={src} channel={channel}");
+                        ShowOffsetApplyStatus(channel: channel, offset: appliedOffset, success: false);
+                        return false;
+                    }
+
+                    bool verified = TryReadbackAfterWrite(channel: channel, desiredOffset: appliedOffset, out double readback);
+                    TraceModbus($"[WRITE VERIFY] readback={readback.ToString("0.0", CultureInfo.InvariantCulture)} success={verified.ToString().ToLowerInvariant()}");
+
+                    if (!verified)
+                    {
+                        if (channel == 1) _lastWrittenOffsetCh1 = appliedOffset;
+                        else _lastWrittenOffsetCh2 = appliedOffset;
+
+                        ShowOffsetApplyStatus(channel: channel, offset: appliedOffset, success: false);
+                        TraceModbus($"[WRITE RESULT] FAIL reason=readback_mismatch src={src} channel={channel} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)}");
+                        return false;
+                    }
+
+                    lock (_offsetStateSync)
+                    {
+                        if (channel == 1) _bath1OffsetCur = readback;
+                        else _bath2OffsetCur = readback;
+                    }
+
+                    if (channel == 1)
+                    {
+                        _lastWrittenOffsetCh1 = readback;
+                        _lastWriteCh1 = DateTime.Now;
+                    }
+                    else
+                    {
+                        _lastWrittenOffsetCh2 = readback;
+                        _lastWriteCh2 = DateTime.Now;
+                    }
+
+                    if (src == "MANUAL")
+                    {
+                        DateTime holdUntil = DateTime.Now.AddSeconds(60);
+                        if (channel == 1) _manualHoldUntilCh1 = holdUntil;
+                        else _manualHoldUntilCh2 = holdUntil;
+                        TraceModbus($"MANUAL HOLD SET ch={channel} until={holdUntil:O}");
+                    }
+
+                    ShowOffsetApplyStatus(channel: channel, offset: readback, success: true);
                     BeginInvoke(new Action(() => UpdateOffsetUiFromState()));
+                    TraceModbus($"[WRITE RESULT] SUCCESS reason=readback_verified src={src} channel={channel}");
                     return true;
                 }
-
-                _lastWrittenOffsetCh2 = appliedOffset;
-                ShowOffsetApplyStatus(channel: 2, offset: appliedOffset, success: false);
-                TraceModbus($"OFFSET APPLY FAIL ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} readback_timeout");
-                return false;
-            }
-
-                return false;
+                finally
+                {
+                    _inWriteSequence = false;
+                }
             }
         }
+        // FIELD PATCH END
 
         // SV/Offset 분리 + cmd 펄스(0→cmd→0) 보장
-        // - OffsetOnly면 offReg만 write
-        // - SvOnly면 svReg만 write
-        // - Command는 항상 0->cmd->0으로 내려준다 (로그/FC10으로 확인 가능)
+        // FIELD PATCH START
+        private bool TryWriteOffsetSequenceNoAck(
+            int channel,
+            ushort offsetWord,
+            string reason,
+            short raw10,
+            out string error)
+        {
+            error = string.Empty;
+
+            ushort cmdStart = channel == 1 ? RegCh1Command : RegCh2Command;
+            ushort offReg = (ushort)(cmdStart + 2);
+            const ushort cmd = 0x0002;
+
+            if (!TryWriteSingleRegister(cmdStart, 0, out string errClear))
+            {
+                error = $"CMD_CLEAR_FAIL:{errClear}";
+                return false;
+            }
+
+            if (!TryWriteSingleRegister(offReg, offsetWord, out string errOffWrite))
+            {
+                error = $"OFFSET_WRITE_FAIL:{errOffWrite}";
+                return false;
+            }
+            TraceModbus($"OFF WRITE OK ch={channel} reason={reason} reg={offReg} off=0x{offsetWord:X4} raw10={raw10}");
+
+            if (!TryWriteSingleRegister(cmdStart, cmd, out string errCmdUp))
+            {
+                error = $"CMD_UP_FAIL:{errCmdUp}";
+                return false;
+            }
+
+            const int CmdPulseHoldMs = 120;
+            Thread.Sleep(CmdPulseHoldMs);
+
+            if (!TryWriteSingleRegister(cmdStart, 0, out string errCmdDown))
+            {
+                error = $"CMD_DOWN_FAIL:{errCmdDown}";
+                return false;
+            }
+
+            return true;
+        }
+
         private bool TryWriteAndWaitAck_Split(
             int channel,
             WriteKind kind,
@@ -438,251 +461,19 @@ namespace ThermoBathCalibrator
             short raw10,
             out string error)
         {
-            error = string.Empty;
-
-            ushort cmdStart = channel == 1 ? RegCh1Command : RegCh2Command;
-
-            // 문서 기준 레이아웃(연속):
-            // [Command] [SV Setting Value] [Offset Setting Value]
-            ushort svReg = (ushort)(cmdStart + 1);
-            ushort offReg = (ushort)(cmdStart + 2);
-
-            ushort cmd = 0;
-            if (kind == WriteKind.SvOnly) cmd = 0x0001;      // bit0
-            if (kind == WriteKind.OffsetOnly) cmd = 0x0002;  // bit1
-
-            int ackMask = cmd & 0x0003;
-            if (ackMask == 0)
-            {
-                TraceModbus($"OFFSET WRITE SKIP ACK ch={channel} reason={reason} kind={kind} cmd=0x{cmd:X4}");
-                return true;
-            }
-
-            // 0) response pre-read (stale 판단/진단용)
-            ushort beforeResp = 0;
-            bool hasBeforeResp = TryReadResponseRegister(channel, out beforeResp, out string errBeforeResp);
-            if (!hasBeforeResp)
-                TraceModbus($"ACK PRE-READ FAIL ch={channel} reason={reason} err={errBeforeResp}");
-            else
-                TraceModbus($"ACK PRE-READ ch={channel} reason={reason} before=0x{beforeResp:X4}");
-
-            // 1) Command 0으로 클리어
-            if (!TryWriteSingleRegister(cmdStart, 0, out string errClear))
-            {
-                error = $"CMD CLEAR FAIL: {errClear}";
-                TraceModbus($"OFFSET CMD CLEAR FAIL ch={channel} reason={reason} reg={cmdStart} err={errClear}");
-                return false;
-            }
-            TraceModbus($"OFFSET CMD CLEAR OK ch={channel} reason={reason} reg={cmdStart} value=0x0000");
-
-            // 2) 값 write (SV만 또는 Offset만)
-            if (kind == WriteKind.SvOnly)
-            {
-                if (!TryWriteSingleRegister(svReg, svWord, out string errSvWrite))
-                {
-                    error = $"SV WRITE FAIL: {errSvWrite}";
-                    TraceModbus($"SV WRITE FAIL ch={channel} reason={reason} reg={svReg} sv=0x{svWord:X4} err={errSvWrite}");
-                    return false;
-                }
-                TraceModbus($"SV WRITE OK ch={channel} reason={reason} reg={svReg} sv=0x{svWord:X4}");
-            }
-            else // OffsetOnly
-            {
-                if (!TryWriteSingleRegister(offReg, offsetWord, out string errOffWrite))
-                {
-                    error = $"OFF WRITE FAIL: {errOffWrite}";
-                    TraceModbus($"OFF WRITE FAIL ch={channel} reason={reason} reg={offReg} off=0x{offsetWord:X4} err={errOffWrite}");
-                    return false;
-                }
-                TraceModbus($"OFF WRITE OK ch={channel} reason={reason} reg={offReg} off=0x{offsetWord:X4} raw10={raw10}");
-            }
-
-            // 3) Command 올리기 (트리거)
-            if (!TryWriteSingleRegister(cmdStart, cmd, out string errCmdUp))
-            {
-                error = $"CMD UP FAIL: {errCmdUp}";
-                TraceModbus($"OFFSET CMD UP FAIL ch={channel} reason={reason} reg={cmdStart} cmd=0x{cmd:X4} err={errCmdUp}");
-                return false;
-            }
-            TraceModbus($"OFFSET CMD UP OK ch={channel} reason={reason} reg={cmdStart} cmd=0x{cmd:X4} kind={kind}");
-
-            // 3.5) cmd 펄스 마무리: cmd -> 0 (여기서 반드시 0으로 내림)
-            const int CmdPulseHoldMs = 120; // 필요 시 50~200ms 조절
-            Thread.Sleep(CmdPulseHoldMs);
-
-            TraceModbus($"OFFSET CMD DOWN TRY ch={channel} reason={reason} reg={cmdStart} value=0x0000 holdMs={CmdPulseHoldMs}");
-
-            if (!TryWriteSingleRegister(cmdStart, 0, out string errCmdDown))
-            {
-                error = $"CMD DOWN FAIL: {errCmdDown}";
-                TraceModbus($"OFFSET CMD DOWN FAIL ch={channel} reason={reason} reg={cmdStart} err={errCmdDown}");
-                return false;
-            }
-            TraceModbus($"OFFSET CMD DOWN OK ch={channel} reason={reason} reg={cmdStart} value=0x0000 holdMs={CmdPulseHoldMs}");
-
-            if (TryReadCommandRegister(channel, out ushort cmdReadback, out string errCmdReadback))
-                TraceModbus($"OFFSET CMD DOWN READBACK ch={channel} reason={reason} reg={cmdStart} value=0x{cmdReadback:X4} isZero={(cmdReadback == 0)}");
-            else
-                TraceModbus($"OFFSET CMD DOWN READBACK FAIL ch={channel} reason={reason} reg={cmdStart} err={errCmdReadback}");
-
-            // 4) ACK 대기
-            Thread.Sleep(AckInitialDelayMs);
-
-            DateTime startTime = DateTime.UtcNow;
-            while ((DateTime.UtcNow - startTime).TotalMilliseconds < AckTimeoutMs)
-            {
-                if (TryReadResponseRegister(channel, out ushort resp, out string errResp))
-                {
-                    bool ackSet = (resp & ackMask) == ackMask;
-                    bool staleAck = hasBeforeResp && ((beforeResp & ackMask) == ackMask) && resp == beforeResp;
-
-                    if (ackSet)
-                    {
-                        if (staleAck)
-                        {
-                            if (_allowStaleAck)
-                            {
-                                TraceModbus($"OFFSET WRITE ACK STALE-ACCEPT ch={channel} reason={reason} before=0x{beforeResp:X4} now=0x{resp:X4} ackMask=0x{ackMask:X4}");
-                            }
-                            else
-                            {
-                                TraceModbus($"OFFSET WRITE ACK STALE-REJECT ch={channel} reason={reason} before=0x{beforeResp:X4} now=0x{resp:X4} ackMask=0x{ackMask:X4}");
-                                Thread.Sleep(AckPollIntervalMs);
-                                continue;
-                            }
-                        }
-
-                        TraceModbus($"OFFSET WRITE ACK OK ch={channel} reason={reason} kind={kind} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} ackResp=0x{resp:X4} ackMask=0x{ackMask:X4}");
-                        return true;
-                    }
-                }
-                else
-                {
-                    TraceModbus($"ACK READ FAIL ch={channel} reason={reason} err={errResp}");
-                }
-
-                Thread.Sleep(AckPollIntervalMs);
-            }
-
-            error = $"ACK TIMEOUT ch={channel} reason={reason} mask=0x{ackMask:X4}";
-            TraceModbus(error);
+            TraceModbus("[INFO] ACK disabled - using readback verification only");
+            error = "ACK_DISABLED";
             return false;
         }
+        // FIELD PATCH END
 
         // (참고) 기존 TryWriteAndWaitAck는 유지해도 되고, 사용 안 하면 그대로 둬도 됨.
         // private bool TryWriteAndWaitAck(...) { ... }
 
         private bool TryWriteAndWaitAck(int channel, ushort cmd, ushort svWord, ushort offsetWord, string reason, double desiredOffset, short raw10, out string error)
         {
-            error = string.Empty;
-
-            ushort cmdStart = channel == 1 ? RegCh1Command : RegCh2Command;
-
-            // 문서 기준 레이아웃(연속):
-            // [Command] [SV Setting Value] [Offset Setting Value]
-            ushort svStart = (ushort)(cmdStart + 1);
-            ushort offStart = (ushort)(cmdStart + 2);
-
-            int ackMask = cmd & 0x0003;
-            if (ackMask == 0)
-            {
-                TraceModbus($"OFFSET WRITE SKIP ACK ch={channel} reason={reason} cmd=0x{cmd:X4}");
-                return true;
-            }
-
-            // 0) response pre-read (stale 판단용)
-            ushort beforeResp = 0;
-            bool hasBeforeResp = TryReadResponseRegister(channel, out beforeResp, out string errBeforeResp);
-            if (!hasBeforeResp)
-                TraceModbus($"ACK PRE-READ FAIL ch={channel} reason={reason} err={errBeforeResp}");
-
-            // 1) Command만 0으로 내리기
-            if (!TryWriteSingleRegister(cmdStart, 0, out string errClear))
-            {
-                error = $"CMD CLEAR FAIL: {errClear}";
-                TraceModbus($"OFFSET CMD CLEAR FAIL ch={channel} reason={reason} reg={cmdStart} err={errClear}");
-                return false;
-            }
-            TraceModbus($"OFFSET CMD CLEAR OK ch={channel} reason={reason} reg={cmdStart} value=0x0000");
-
-            // 2) 값 먼저 세팅 (SV/Offset)
-            ushort[] valuesPayload = new ushort[] { svWord, offsetWord };
-            if (!_mb.TryWriteMultipleRegisters(svStart, valuesPayload, out string errValueWrite))
-            {
-                error = $"VALUE WRITE FAIL: {errValueWrite}";
-                TraceModbus($"OFFSET VALUE WRITE FAIL ch={channel} reason={reason} svReg={svStart} offReg={offStart} sv=0x{svWord:X4} off=0x{offsetWord:X4} err={errValueWrite}");
-                return false;
-            }
-            TraceModbus($"OFFSET VALUE WRITE OK ch={channel} reason={reason} svReg={svStart} offReg={offStart} sv=0x{svWord:X4} off=0x{offsetWord:X4}");
-
-            // 3) Command 올리기 (트리거)
-            if (!TryWriteSingleRegister(cmdStart, cmd, out string errCmdWrite))
-            {
-                error = $"CMD WRITE FAIL: {errCmdWrite}";
-                TraceModbus($"OFFSET CMD WRITE FAIL ch={channel} reason={reason} reg={cmdStart} cmd=0x{cmd:X4} err={errCmdWrite}");
-                return false;
-            }
-            TraceModbus($"OFFSET CMD WRITE OK ch={channel} reason={reason} reg={cmdStart} cmd=0x{cmd:X4}");
-
-            // 3.5) 펄스 마무리(2 -> 0)
-            const int CmdPulseHoldMs = 120; // 필요 시 50~200ms 범위로 조절
-            Thread.Sleep(CmdPulseHoldMs);
-
-            TraceModbus($"OFFSET CMD DOWN TRY ch={channel} reason={reason} reg={cmdStart} value=0x0000 holdMs={CmdPulseHoldMs}");
-
-            if (!TryWriteSingleRegister(cmdStart, 0, out string errCmdDown))
-            {
-                error = $"CMD DOWN FAIL: {errCmdDown}";
-                TraceModbus($"OFFSET CMD DOWN FAIL ch={channel} reason={reason} reg={cmdStart} err={errCmdDown}");
-                return false;
-            }
-            TraceModbus($"OFFSET CMD DOWN OK ch={channel} reason={reason} reg={cmdStart} value=0x0000 holdMs={CmdPulseHoldMs}");
-
-            if (TryReadCommandRegister(channel, out ushort cmdReadback, out string errCmdReadback))
-                TraceModbus($"OFFSET CMD DOWN READBACK ch={channel} reason={reason} reg={cmdStart} value=0x{cmdReadback:X4} isZero={(cmdReadback == 0)}");
-            else
-                TraceModbus($"OFFSET CMD DOWN READBACK FAIL ch={channel} reason={reason} reg={cmdStart} err={errCmdReadback}");
-
-            // 4) ACK 대기
-            Thread.Sleep(AckInitialDelayMs);
-
-            DateTime startTime = DateTime.UtcNow;
-            while ((DateTime.UtcNow - startTime).TotalMilliseconds < AckTimeoutMs)
-            {
-                if (TryReadResponseRegister(channel, out ushort resp, out string errResp))
-                {
-                    bool ackSet = (resp & ackMask) == ackMask;
-                    bool staleAck = hasBeforeResp && ((beforeResp & ackMask) == ackMask) && resp == beforeResp;
-
-                    if (ackSet)
-                    {
-                        if (staleAck)
-                        {
-                            if (_allowStaleAck)
-                            {
-                                TraceModbus($"OFFSET WRITE ACK STALE-ACCEPT ch={channel} reason={reason} before=0x{beforeResp:X4} now=0x{resp:X4} ackMask=0x{ackMask:X4}");
-                            }
-                            else
-                            {
-                                TraceModbus($"OFFSET WRITE ACK STALE-REJECT ch={channel} reason={reason} before=0x{beforeResp:X4} now=0x{resp:X4} ackMask=0x{ackMask:X4}");
-                                Thread.Sleep(AckPollIntervalMs);
-                                continue;
-                            }
-                        }
-                        TraceModbus($"OFFSET WRITE ACK OK ch={channel} reason={reason} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} ackResp=0x{resp:X4} ackMask=0x{ackMask:X4}");
-                        return true;
-                    }
-                }
-                else
-                {
-                    TraceModbus($"ACK READ FAIL ch={channel} reason={reason} err={errResp}");
-                }
-
-                Thread.Sleep(AckPollIntervalMs);
-            }
-
-            error = $"ACK TIMEOUT ch={channel} reason={reason} mask=0x{ackMask:X4}";
-            TraceModbus(error);
+            TraceModbus("[INFO] ACK disabled - using readback verification only");
+            error = "ACK_DISABLED";
             return false;
         }
 

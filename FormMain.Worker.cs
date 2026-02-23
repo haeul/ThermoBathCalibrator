@@ -149,30 +149,51 @@ namespace ThermoBathCalibrator
 
             if (enableControl)
             {
-                // ON: 자동 제어 계산 + 필요 시 write(FC10) 가능
-                next1 = _autoCtrl.UpdateAndMaybeWrite(
-                    channel: 1,
-                    now: now,
-                    readOk: readOk,
-                    ut: utCh1,
-                    err: err1,
-                    currentOffset: currentOffset1,
-                    targetTemperature: _bath1Setpoint,
-                    tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
-                    traceLog: TraceModbus
-                );
+                // FIELD PATCH START
+                bool holdCh1 = _manualHoldUntilCh1.HasValue && now < _manualHoldUntilCh1.Value;
+                bool holdCh2 = _manualHoldUntilCh2.HasValue && now < _manualHoldUntilCh2.Value;
 
-                next2 = _autoCtrl.UpdateAndMaybeWrite(
-                    channel: 2,
-                    now: now,
-                    readOk: readOk,
-                    ut: utCh2,
-                    err: err2,
-                    currentOffset: currentOffset2,
-                    targetTemperature: _bath2Setpoint,
-                    tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
-                    traceLog: TraceModbus
-                );
+                // ON: 자동 제어 계산 + 필요 시 write(FC10) 가능
+                if (holdCh1)
+                {
+                    TraceModbus($"AUTO WRITE SKIP ch=1 reason=manual_hold until={_manualHoldUntilCh1.Value:O}");
+                    next1 = currentOffset1;
+                }
+                else
+                {
+                    next1 = _autoCtrl.UpdateAndMaybeWrite(
+                        channel: 1,
+                        now: now,
+                        readOk: readOk,
+                        ut: utCh1,
+                        err: err1,
+                        currentOffset: currentOffset1,
+                        targetTemperature: _bath1Setpoint,
+                        tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
+                        traceLog: TraceModbus
+                    );
+                }
+
+                if (holdCh2)
+                {
+                    TraceModbus($"AUTO WRITE SKIP ch=2 reason=manual_hold until={_manualHoldUntilCh2.Value:O}");
+                    next2 = currentOffset2;
+                }
+                else
+                {
+                    next2 = _autoCtrl.UpdateAndMaybeWrite(
+                        channel: 2,
+                        now: now,
+                        readOk: readOk,
+                        ut: utCh2,
+                        err: err2,
+                        currentOffset: currentOffset2,
+                        targetTemperature: _bath2Setpoint,
+                        tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
+                        traceLog: TraceModbus
+                    );
+                }
+                // FIELD PATCH END
             }
             else
             {
