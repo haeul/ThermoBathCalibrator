@@ -7,6 +7,13 @@ namespace ThermoBathCalibrator
 {
     public partial class FormMain
     {
+        // ✅ 추가: SV/Offset 분리 쓰기 구분용
+        private enum WriteKind
+        {
+            SvOnly,
+            OffsetOnly
+        }
+
         private void LoadMultiBoardSettingsFromDiskIfAny()
         {
             try
@@ -299,6 +306,7 @@ namespace ThermoBathCalibrator
             return true;
         }
 
+        // ✅ 변경: TryWriteChannelOffset에서 "Offset만" 쓰도록 분리 호출
         private bool TryWriteChannelOffset(int channel, double appliedOffset, string reason = "UNSPECIFIED")
         {
             if (!_mb.IsConnected)
@@ -322,13 +330,21 @@ namespace ThermoBathCalibrator
 
             if (channel == 1)
             {
-                ushort cmd = 0;
-                cmd |= (1 << 1);
-
                 ushort svWord = unchecked((ushort)((short)Math.Round(_bath1Setpoint * 10.0, MidpointRounding.AwayFromZero)));
 
-                TraceModbus($"OFFSET WRITE TRY ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} cmd=0x{cmd:X4} svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
-                bool ok = TryWriteAndWaitAck(channel: 1, cmd: cmd, svWord: svWord, offsetWord: offsetWord, reason: reason, desiredOffset: appliedOffset, raw10: raw10, out string errWriteAndAck);
+                TraceModbus($"OFFSET WRITE TRY ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} (OFFSET-ONLY) svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
+
+                bool ok = TryWriteAndWaitAck_Split(
+                    channel: 1,
+                    kind: WriteKind.OffsetOnly,
+                    svWord: svWord,
+                    offsetWord: offsetWord,
+                    reason: reason,
+                    desiredOffset: appliedOffset,
+                    raw10: raw10,
+                    out string errWriteAndAck
+                );
+
                 if (!ok)
                 {
                     TraceModbus($"OFFSET WRITE FAIL ch=1 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
@@ -359,13 +375,21 @@ namespace ThermoBathCalibrator
 
             if (channel == 2)
             {
-                ushort cmd = 0;
-                cmd |= (1 << 1);
-
                 ushort svWord = unchecked((ushort)((short)Math.Round(_bath2Setpoint * 10.0, MidpointRounding.AwayFromZero)));
 
-                TraceModbus($"OFFSET WRITE TRY ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} cmd=0x{cmd:X4} svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
-                bool ok = TryWriteAndWaitAck(channel: 2, cmd: cmd, svWord: svWord, offsetWord: offsetWord, reason: reason, desiredOffset: appliedOffset, raw10: raw10, out string errWriteAndAck);
+                TraceModbus($"OFFSET WRITE TRY ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} (OFFSET-ONLY) svWord=0x{svWord:X4} offWord=0x{offsetWord:X4}");
+
+                bool ok = TryWriteAndWaitAck_Split(
+                    channel: 2,
+                    kind: WriteKind.OffsetOnly,
+                    svWord: svWord,
+                    offsetWord: offsetWord,
+                    reason: reason,
+                    desiredOffset: appliedOffset,
+                    raw10: raw10,
+                    out string errWriteAndAck
+                );
+
                 if (!ok)
                 {
                     TraceModbus($"OFFSET WRITE FAIL ch=2 reason={reason} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} err={errWriteAndAck}");
@@ -397,6 +421,136 @@ namespace ThermoBathCalibrator
             return false;
         }
 
+        // ✅ 추가: SV/Offset 분리 + cmd 펄스(0→cmd→0) 보장
+        // - OffsetOnly면 offReg만 write
+        // - SvOnly면 svReg만 write
+        // - Command는 항상 0->cmd->0으로 내려준다 (로그/FC10으로 확인 가능)
+        private bool TryWriteAndWaitAck_Split(
+            int channel,
+            WriteKind kind,
+            ushort svWord,
+            ushort offsetWord,
+            string reason,
+            double desiredOffset,
+            short raw10,
+            out string error)
+        {
+            error = string.Empty;
+
+            ushort cmdStart = channel == 1 ? RegCh1Command : RegCh2Command;
+
+            // 문서 기준 레이아웃(연속):
+            // [Command] [SV Setting Value] [Offset Setting Value]
+            ushort svReg = (ushort)(cmdStart + 1);
+            ushort offReg = (ushort)(cmdStart + 2);
+
+            ushort cmd = 0;
+            if (kind == WriteKind.SvOnly) cmd = 0x0001;      // bit0
+            if (kind == WriteKind.OffsetOnly) cmd = 0x0002;  // bit1
+
+            int ackMask = cmd & 0x0003;
+            if (ackMask == 0)
+            {
+                TraceModbus($"OFFSET WRITE SKIP ACK ch={channel} reason={reason} kind={kind} cmd=0x{cmd:X4}");
+                return true;
+            }
+
+            // 0) response pre-read (stale 판단/진단용)
+            ushort beforeResp = 0;
+            bool hasBeforeResp = TryReadResponseRegister(channel, out beforeResp, out string errBeforeResp);
+            if (!hasBeforeResp)
+                TraceModbus($"ACK PRE-READ FAIL ch={channel} reason={reason} err={errBeforeResp}");
+            else
+                TraceModbus($"ACK PRE-READ ch={channel} reason={reason} before=0x{beforeResp:X4}");
+
+            // 1) Command 0으로 클리어
+            if (!TryWriteSingleRegister(cmdStart, 0, out string errClear))
+            {
+                error = $"CMD CLEAR FAIL: {errClear}";
+                TraceModbus($"OFFSET CMD CLEAR FAIL ch={channel} reason={reason} reg={cmdStart} err={errClear}");
+                return false;
+            }
+            TraceModbus($"OFFSET CMD CLEAR OK ch={channel} reason={reason} reg={cmdStart} value=0x0000");
+
+            // 2) 값 write (SV만 또는 Offset만)
+            if (kind == WriteKind.SvOnly)
+            {
+                if (!TryWriteSingleRegister(svReg, svWord, out string errSvWrite))
+                {
+                    error = $"SV WRITE FAIL: {errSvWrite}";
+                    TraceModbus($"SV WRITE FAIL ch={channel} reason={reason} reg={svReg} sv=0x{svWord:X4} err={errSvWrite}");
+                    return false;
+                }
+                TraceModbus($"SV WRITE OK ch={channel} reason={reason} reg={svReg} sv=0x{svWord:X4}");
+            }
+            else // OffsetOnly
+            {
+                if (!TryWriteSingleRegister(offReg, offsetWord, out string errOffWrite))
+                {
+                    error = $"OFF WRITE FAIL: {errOffWrite}";
+                    TraceModbus($"OFF WRITE FAIL ch={channel} reason={reason} reg={offReg} off=0x{offsetWord:X4} err={errOffWrite}");
+                    return false;
+                }
+                TraceModbus($"OFF WRITE OK ch={channel} reason={reason} reg={offReg} off=0x{offsetWord:X4} raw10={raw10}");
+            }
+
+            // 3) Command 올리기 (트리거)
+            if (!TryWriteSingleRegister(cmdStart, cmd, out string errCmdUp))
+            {
+                error = $"CMD UP FAIL: {errCmdUp}";
+                TraceModbus($"OFFSET CMD UP FAIL ch={channel} reason={reason} reg={cmdStart} cmd=0x{cmd:X4} err={errCmdUp}");
+                return false;
+            }
+            TraceModbus($"OFFSET CMD UP OK ch={channel} reason={reason} reg={cmdStart} cmd=0x{cmd:X4} kind={kind}");
+
+            // 3.5) cmd 펄스 마무리: cmd -> 0 (✅ 여기서 반드시 0으로 내림)
+            const int CmdPulseHoldMs = 120; // 필요 시 50~200ms 조절
+            Thread.Sleep(CmdPulseHoldMs);
+
+            if (!TryWriteSingleRegister(cmdStart, 0, out string errCmdDown))
+            {
+                error = $"CMD DOWN FAIL: {errCmdDown}";
+                TraceModbus($"OFFSET CMD DOWN FAIL ch={channel} reason={reason} reg={cmdStart} err={errCmdDown}");
+                return false;
+            }
+            TraceModbus($"OFFSET CMD DOWN OK ch={channel} reason={reason} reg={cmdStart} value=0x0000 holdMs={CmdPulseHoldMs}");
+
+            // 4) ACK 대기
+            Thread.Sleep(AckInitialDelayMs);
+
+            DateTime startTime = DateTime.UtcNow;
+            while ((DateTime.UtcNow - startTime).TotalMilliseconds < AckTimeoutMs)
+            {
+                if (TryReadResponseRegister(channel, out ushort resp, out string errResp))
+                {
+                    bool ackSet = (resp & ackMask) == ackMask;
+                    bool staleAck = hasBeforeResp && ((beforeResp & ackMask) == ackMask) && resp == beforeResp;
+
+                    if (ackSet)
+                    {
+                        if (staleAck)
+                            TraceModbus($"OFFSET WRITE ACK STALE-ACCEPT ch={channel} reason={reason} before=0x{beforeResp:X4} now=0x{resp:X4} ackMask=0x{ackMask:X4}");
+
+                        TraceModbus($"OFFSET WRITE ACK OK ch={channel} reason={reason} kind={kind} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10} ackResp=0x{resp:X4} ackMask=0x{ackMask:X4}");
+                        return true;
+                    }
+                }
+                else
+                {
+                    TraceModbus($"ACK READ FAIL ch={channel} reason={reason} err={errResp}");
+                }
+
+                Thread.Sleep(AckPollIntervalMs);
+            }
+
+            error = $"ACK TIMEOUT ch={channel} reason={reason} mask=0x{ackMask:X4}";
+            TraceModbus(error);
+            return false;
+        }
+
+        // (참고) 기존 TryWriteAndWaitAck는 유지해도 되고, 사용 안 하면 그대로 둬도 됨.
+        // private bool TryWriteAndWaitAck(...) { ... }
+
         private bool TryWriteAndWaitAck(int channel, ushort cmd, ushort svWord, ushort offsetWord, string reason, double desiredOffset, short raw10, out string error)
         {
             error = string.Empty;
@@ -415,13 +569,13 @@ namespace ThermoBathCalibrator
                 return true;
             }
 
-            // 0) response pre-read (stale 판단용, stale도 수용하지만 진단 로그를 남기기 위해 읽어둠)
+            // 0) response pre-read (stale 판단용)
             ushort beforeResp = 0;
             bool hasBeforeResp = TryReadResponseRegister(channel, out beforeResp, out string errBeforeResp);
             if (!hasBeforeResp)
                 TraceModbus($"ACK PRE-READ FAIL ch={channel} reason={reason} err={errBeforeResp}");
 
-            // 1) Command만 0으로 내리기 (순차 처리/edge 처리 펌웨어 대응)
+            // 1) Command만 0으로 내리기
             if (!TryWriteSingleRegister(cmdStart, 0, out string errClear))
             {
                 error = $"CMD CLEAR FAIL: {errClear}";
@@ -431,7 +585,6 @@ namespace ThermoBathCalibrator
             TraceModbus($"OFFSET CMD CLEAR OK ch={channel} reason={reason} reg={cmdStart} value=0x0000");
 
             // 2) 값 먼저 세팅 (SV/Offset)
-            // 일부 펌웨어는 command 처리 시점에 value 레지스터를 읽으므로 값이 먼저 들어가게 한다.
             ushort[] valuesPayload = new ushort[] { svWord, offsetWord };
             if (!_mb.TryWriteMultipleRegisters(svStart, valuesPayload, out string errValueWrite))
             {
@@ -441,7 +594,7 @@ namespace ThermoBathCalibrator
             }
             TraceModbus($"OFFSET VALUE WRITE OK ch={channel} reason={reason} svReg={svStart} offReg={offStart} sv=0x{svWord:X4} off=0x{offsetWord:X4}");
 
-            // 3) 마지막에 Command 올리기 (실제 트리거)
+            // 3) Command 올리기 (트리거)
             if (!TryWriteSingleRegister(cmdStart, cmd, out string errCmdWrite))
             {
                 error = $"CMD WRITE FAIL: {errCmdWrite}";
@@ -449,6 +602,18 @@ namespace ThermoBathCalibrator
                 return false;
             }
             TraceModbus($"OFFSET CMD WRITE OK ch={channel} reason={reason} reg={cmdStart} cmd=0x{cmd:X4}");
+
+            // 3.5) 펄스 마무리(2 -> 0)
+            const int CmdPulseHoldMs = 120; // 필요 시 50~200ms 범위로 조절
+            Thread.Sleep(CmdPulseHoldMs);
+
+            if (!TryWriteSingleRegister(cmdStart, 0, out string errCmdDown))
+            {
+                error = $"CMD DOWN FAIL: {errCmdDown}";
+                TraceModbus($"OFFSET CMD DOWN FAIL ch={channel} reason={reason} reg={cmdStart} err={errCmdDown}");
+                return false;
+            }
+            TraceModbus($"OFFSET CMD DOWN OK ch={channel} reason={reason} reg={cmdStart} value=0x0000 holdMs={CmdPulseHoldMs}");
 
             // 4) ACK 대기
             Thread.Sleep(AckInitialDelayMs);
@@ -461,8 +626,6 @@ namespace ThermoBathCalibrator
                     bool ackSet = (resp & ackMask) == ackMask;
                     bool staleAck = hasBeforeResp && ((beforeResp & ackMask) == ackMask) && resp == beforeResp;
 
-                    // 일부 펌웨어는 response 비트가 clear되지 않고 계속 1로 유지될 수 있다.
-                    // stale 여부만으로 실패 처리하지 않고, ackSet이면 통과시킨다.
                     if (ackSet)
                     {
                         if (staleAck)
@@ -489,8 +652,7 @@ namespace ThermoBathCalibrator
         {
             error = string.Empty;
 
-            // MultiBoardModbusClient에 단일 write가 별도 API로 없다고 가정하고
-            // FC10(Write Multiple Registers) count=1로 통일한다.
+            // FC10 count=1로 통일
             ushort[] payload = new ushort[] { value };
             bool ok = _mb.TryWriteMultipleRegisters(start, payload, out string err);
             if (!ok)
