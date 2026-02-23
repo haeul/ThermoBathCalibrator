@@ -25,6 +25,7 @@ namespace ThermoBathCalibrator
                         BeginInvoke(new Action(() =>
                         {
                             UpdateOffsetUiFromState();
+                            UpdateAlarmState(double.NaN, double.NaN);
                             UpdateStatusLabels();
                         }));
                     }
@@ -35,6 +36,7 @@ namespace ThermoBathCalibrator
                             AppendRowToGrid(row);
                             AppendRowToHistory(row);
                             UpdateTopNumbers(row.UtCh1, row.UtCh2);
+                            UpdateAlarmState(row.UtCh1, row.UtCh2);
                             UpdateOffsetUiFromState();
                             UpdateStatusLabels();
                             pnlCh1Graph.Invalidate();
@@ -89,6 +91,12 @@ namespace ThermoBathCalibrator
 
             double bath1Pv = readOk ? snap.Ch1Pv : double.NaN;
             double bath2Pv = readOk ? snap.Ch2Pv : double.NaN;
+
+            if (readOk)
+            {
+                _bath1Setpoint = snap.Ch1Sv;
+                _bath2Setpoint = snap.Ch2Sv;
+            }
 
             // ===== read-back 기반 cur 갱신(정본) =====
             if (readOk)
@@ -149,6 +157,7 @@ namespace ThermoBathCalibrator
                     ut: utCh1,
                     err: err1,
                     currentOffset: currentOffset1,
+                    targetTemperature: _bath1Setpoint,
                     tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
                     traceLog: TraceModbus
                 );
@@ -160,6 +169,7 @@ namespace ThermoBathCalibrator
                     ut: utCh2,
                     err: err2,
                     currentOffset: currentOffset2,
+                    targetTemperature: _bath2Setpoint,
                     tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
                     traceLog: TraceModbus
                 );

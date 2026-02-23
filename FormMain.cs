@@ -26,6 +26,7 @@ namespace ThermoBathCalibrator
             btnOffsetApplyCh2.Click += BtnOffsetApplyCh2_Click;
 
             btnComSetting.Click += BtnComSetting_Click;
+            lblHeader.DoubleClick += LblHeader_DoubleClick;
 
             // NEW: offset control checkbox
             chkEnableOffsetControl.CheckedChanged += ChkEnableOffsetControl_CheckedChanged;
@@ -79,6 +80,12 @@ namespace ThermoBathCalibrator
 
                 UpdateStatusLabels();
             };
+
+            _alarmFlashTimer = new System.Windows.Forms.Timer();
+            _alarmFlashTimer.Interval = 350;
+            _alarmFlashTimer.Tick += (s, e) => ToggleAlarmFlash();
+
+            CacheNormalBackColors(this);
 
             // 체크박스 상태에 따라 UI 잠금 반영
             ApplyOffsetControlUiLock();
@@ -292,6 +299,100 @@ namespace ThermoBathCalibrator
             catch (Exception ex)
             {
                 MessageBox.Show(ex.Message, "COM Settings Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void LblHeader_DoubleClick(object? sender, EventArgs e)
+        {
+            using (var dlg = new FormAdminSettings(_utBiasCh1, _utBiasCh2, _bath1Setpoint, _bath2Setpoint))
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK)
+                    return;
+
+                _utBiasCh1 = dlg.UtBiasCh1;
+                _utBiasCh2 = dlg.UtBiasCh2;
+
+                _bath1Setpoint = dlg.SetpointCh1;
+                _bath2Setpoint = dlg.SetpointCh2;
+
+                double offset1;
+                double offset2;
+                lock (_offsetStateSync)
+                {
+                    offset1 = _bath1OffsetCur;
+                    offset2 = _bath2OffsetCur;
+                }
+
+                _ = TryWriteChannelOffset(1, offset1, "ADMIN_SETPOINT_APPLY");
+                _ = TryWriteChannelOffset(2, offset2, "ADMIN_SETPOINT_APPLY");
+
+                _autoCfg.TargetTemperature = AverageOrNaN(_bath1Setpoint, _bath2Setpoint);
+                UpdateStatusLabels();
+            }
+        }
+
+        private void UpdateAlarmState(double ch1, double ch2)
+        {
+            bool ch1Alarm = !double.IsNaN(ch1) && Math.Abs(ch1 - _bath1Setpoint) >= TempAlarmThresholdC;
+            bool ch2Alarm = !double.IsNaN(ch2) && Math.Abs(ch2 - _bath2Setpoint) >= TempAlarmThresholdC;
+            bool active = ch1Alarm || ch2Alarm;
+
+            if (active == _isTempAlarmActive)
+                return;
+
+            _isTempAlarmActive = active;
+
+            if (_isTempAlarmActive)
+            {
+                _isAlarmFlashOn = false;
+                _alarmFlashTimer?.Start();
+                ToggleAlarmFlash();
+            }
+            else
+            {
+                _alarmFlashTimer?.Stop();
+                RestoreNormalBackColors();
+            }
+        }
+
+        private void ToggleAlarmFlash()
+        {
+            _isAlarmFlashOn = !_isAlarmFlashOn;
+            ApplyAlarmBackColor(_isAlarmFlashOn ? Color.Red : Color.White);
+        }
+
+        private void CacheNormalBackColors(Control root)
+        {
+            if (!_normalBackColors.ContainsKey(root))
+                _normalBackColors[root] = root.BackColor;
+
+            foreach (Control child in root.Controls)
+            {
+                CacheNormalBackColors(child);
+            }
+        }
+
+        private void ApplyAlarmBackColor(Color color)
+        {
+            SetBackColorRecursive(this, color);
+            Invalidate(true);
+        }
+
+        private void RestoreNormalBackColors()
+        {
+            foreach (var kv in _normalBackColors)
+            {
+                kv.Key.BackColor = kv.Value;
+            }
+            Invalidate(true);
+        }
+
+        private static void SetBackColorRecursive(Control root, Color color)
+        {
+            root.BackColor = color;
+            foreach (Control child in root.Controls)
+            {
+                SetBackColorRecursive(child, color);
             }
         }
 

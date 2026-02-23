@@ -112,5 +112,12 @@ namespace ThermoBathCalibrator
         private string _offsetApplyStatusText = string.Empty;
         private System.Drawing.Color _offsetApplyStatusColor = System.Drawing.Color.DeepSkyBlue;
         private System.Windows.Forms.Timer? _offsetStatusTimer;
+
+        // 온도 이탈 경보(전체 화면 점멸)
+        private const double TempAlarmThresholdC = 0.1;
+        private bool _isTempAlarmActive;
+        private bool _isAlarmFlashOn;
+        private System.Windows.Forms.Timer? _alarmFlashTimer;
+        private readonly System.Collections.Generic.Dictionary<System.Windows.Forms.Control, System.Drawing.Color> _normalBackColors = new System.Collections.Generic.Dictionary<System.Windows.Forms.Control, System.Drawing.Color>();
     }
 }

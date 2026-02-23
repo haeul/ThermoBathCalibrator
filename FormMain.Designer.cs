@@ -112,9 +112,9 @@ namespace ThermoBathCalibrator
             lblHeader.ForeColor = SystemColors.ControlDarkDark;
             lblHeader.Location = new Point(612, 7);
             lblHeader.Name = "lblHeader";
-            lblHeader.Size = new Size(329, 65);
+            lblHeader.Size = new Size(377, 65);
             lblHeader.TabIndex = 1;
-            lblHeader.Text = "데이터 수집기";
+            lblHeader.Text = "항온조 컨트롤러";
             // 
             // pnlBacrground
             // 
@@ -231,7 +231,6 @@ namespace ThermoBathCalibrator
             // chkEnableOffsetControl
             // 
             chkEnableOffsetControl.BackColor = SystemColors.Control;
-            chkEnableOffsetControl.Dock = DockStyle.Fill;
             chkEnableOffsetControl.Font = new Font("Segoe UI Semibold", 12.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
             chkEnableOffsetControl.Location = new Point(1114, 1);
             chkEnableOffsetControl.Margin = new Padding(0);

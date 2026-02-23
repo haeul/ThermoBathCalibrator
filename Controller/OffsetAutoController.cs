@@ -5,7 +5,6 @@ namespace ThermoBathCalibrator.Controller
     internal sealed class OffsetAutoController
     {
         // Smart Bath Control constants (m°C scale)
-        private const int TARGET_TEMP_MILLI = 25000;
         private const int DEADBAND_MILLI = 20;            // ±0.02°C
         private const int SLOPE_THRESHOLD_MILLI = 5;      // 0.005°C per tick (1s)
         private const int MIN_ACTION_INTERVAL_MS = 60000; // 60s
@@ -72,6 +71,7 @@ namespace ThermoBathCalibrator.Controller
             double ut,
             double err,
             double currentOffset,
+            double targetTemperature,
             Func<int, double, string, bool> tryWriteOffset,
             Action<string>? traceLog = null)
         {
@@ -88,6 +88,7 @@ namespace ThermoBathCalibrator.Controller
             EnsureLocalOffsetInitialized(st, currentOffset);
 
             int currentTempMilli = ToMilli(ut);
+            int targetTempMilli = ToMilli(targetTemperature);
 
             // 개선 2) offset 비교 허용오차 완화: OffsetStep의 절반을 기준으로 비교
             // (double 오차로 인한 불필요 mismatch resend 방지)
@@ -105,7 +106,7 @@ namespace ThermoBathCalibrator.Controller
             }
 
             // Follow-up correction based on previous action (+/-0.01°C crossing)
-            if (st.PrevAction == TempDirection.Up && currentTempMilli > TARGET_TEMP_MILLI + FOLLOW_UP_THRESHOLD_MILLI)
+            if (st.PrevAction == TempDirection.Up && currentTempMilli > targetTempMilli + FOLLOW_UP_THRESHOLD_MILLI)
             {
                 double next = QuantizeClamp(currentOffset + _cfg.OffsetStep);
                 st.PrevAction = TempDirection.Init;
@@ -121,7 +122,7 @@ namespace ThermoBathCalibrator.Controller
                 return ok ? next : currentOffset;
             }
 
-            if (st.PrevAction == TempDirection.Down && currentTempMilli < TARGET_TEMP_MILLI - FOLLOW_UP_THRESHOLD_MILLI)
+            if (st.PrevAction == TempDirection.Down && currentTempMilli < targetTempMilli - FOLLOW_UP_THRESHOLD_MILLI)
             {
                 double next = QuantizeClamp(currentOffset - _cfg.OffsetStep);
                 st.PrevAction = TempDirection.Init;
@@ -152,7 +153,7 @@ namespace ThermoBathCalibrator.Controller
             }
 
             int slopeMilli = currentTempMilli - st.PrevTempMilli.Value;
-            int errorMilli = currentTempMilli - TARGET_TEMP_MILLI;
+            int errorMilli = currentTempMilli - targetTempMilli;
 
             st.PrevTempMilli = currentTempMilli;
 
