@@ -92,6 +92,11 @@ namespace ThermoBathCalibrator
             double bath1Pv = readOk ? snap.Ch1Pv : double.NaN;
             double bath2Pv = readOk ? snap.Ch2Pv : double.NaN;
 
+            double rowMax = MaxOrNaN(utCh1, utCh2);
+            double rowMin = MinOrNaN(utCh1, utCh2);
+            double rowAvg = AverageOrNaN(utCh1, utCh2);
+            UpdateDailyStats(now, rowAvg);
+
             if (readOk)
             {
                 _bath1Setpoint = snap.Ch1Sv;
@@ -239,6 +244,10 @@ namespace ThermoBathCalibrator
                 UtCh2 = utCh2,
                 UtTj = utTj,
 
+                Max = rowMax,
+                Min = rowMin,
+                Average = rowAvg,
+
                 Bath1Pv = bath1Pv,
                 Bath2Pv = bath2Pv,
 
@@ -272,7 +281,11 @@ namespace ThermoBathCalibrator
                 Bath2OffsetApplied = next2,
 
                 Bath1SetTemp = bath1SetTemp,
-                Bath2SetTemp = bath2SetTemp
+                Bath2SetTemp = bath2SetTemp,
+
+                DailyMax = _dailyMax,
+                DailyMin = _dailyMin,
+                DailyAverage = (_dailyCount > 0) ? (_dailySum / _dailyCount) : double.NaN
             };
         }
 
@@ -288,6 +301,57 @@ namespace ThermoBathCalibrator
 
             while (_history.Count > 2 && _history[0].Timestamp < minT)
                 _history.RemoveAt(0);
+        }
+
+        private void UpdateDailyStats(DateTime now, double value)
+        {
+            DateTime day = now.Date;
+            if (_dailyStatsDay != day)
+            {
+                _dailyStatsDay = day;
+                _dailyMax = double.NaN;
+                _dailyMin = double.NaN;
+                _dailySum = 0.0;
+                _dailyCount = 0;
+            }
+
+            if (double.IsNaN(value) || double.IsInfinity(value)) return;
+
+            if (_dailyCount == 0)
+            {
+                _dailyMax = value;
+                _dailyMin = value;
+            }
+            else
+            {
+                if (value > _dailyMax) _dailyMax = value;
+                if (value < _dailyMin) _dailyMin = value;
+            }
+
+            _dailySum += value;
+            _dailyCount++;
+        }
+
+        private static double MaxOrNaN(double a, double b)
+        {
+            bool aOk = !double.IsNaN(a) && !double.IsInfinity(a);
+            bool bOk = !double.IsNaN(b) && !double.IsInfinity(b);
+
+            if (aOk && bOk) return Math.Max(a, b);
+            if (aOk) return a;
+            if (bOk) return b;
+            return double.NaN;
+        }
+
+        private static double MinOrNaN(double a, double b)
+        {
+            bool aOk = !double.IsNaN(a) && !double.IsInfinity(a);
+            bool bOk = !double.IsNaN(b) && !double.IsInfinity(b);
+
+            if (aOk && bOk) return Math.Min(a, b);
+            if (aOk) return a;
+            if (bOk) return b;
+            return double.NaN;
         }
 
         private static double AverageOrNaN(double a, double b)

@@ -1,581 +1,229 @@
-﻿using System.Drawing;
+﻿using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Globalization;
+using System.Linq;
+using System.Reflection;
 using System.Windows.Forms;
 
 namespace ThermoBathCalibrator
 {
-    partial class FormMain
+    public partial class FormMain
     {
-        private System.ComponentModel.IContainer components = null;
-
-        protected override void Dispose(bool disposing)
+        private void PnlCh1Graph_Paint(object sender, PaintEventArgs e)
         {
-            if (disposing && (components != null))
+            DrawGraph(e.Graphics, pnlCh1Graph.ClientRectangle, channel: 1);
+        }
+
+        private void PnlCh2Graph_Paint(object sender, PaintEventArgs e)
+        {
+            DrawGraph(e.Graphics, pnlCh2Graph.ClientRectangle, channel: 2);
+        }
+
+        private void DrawGraph(Graphics g, Rectangle clientRect, int channel)
+        {
+            g.Clear(Color.White);
+
+            using var borderPen = new Pen(Color.Silver, 1);
+            g.DrawRectangle(borderPen, new Rectangle(clientRect.Left, clientRect.Top, clientRect.Width - 1, clientRect.Height - 1));
+
+            if (_history == null || _history.Count < 2)
+                return;
+
+            // plot area
+            Rectangle plot = clientRect;
+            plot.Inflate(-60, -46); // 좌/우/상/하 여백 조금 더
+
+            DateTime lastT = _history[_history.Count - 1].Timestamp;
+            DateTime minT = lastT - GraphWindow;
+            DateTime firstT = _history[0].Timestamp;
+            if (firstT > minT) minT = firstT;
+
+            // ===== Temp axis (left) =====
+            double minTemp = UseFixedGraphScale ? FixedGraphMinY : 24.8;
+            double maxTemp = UseFixedGraphScale ? FixedGraphMaxY : 25.2;
+
+            // ===== ON/OFF axis (right) =====
+            double minOnOff = 0.0;
+            double maxOnOff = 1.0;
+
+            using var gridMinor = new Pen(Color.Gainsboro, 1) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot };
+            using var gridMajor = new Pen(Color.LightGray, 1.2f);
+            using var axisPen = new Pen(Color.Gray, 1);
+
+            using var axisFont = new Font("Segoe UI", 8, FontStyle.Regular);
+            using var axisBrush = new SolidBrush(Color.DimGray);
+
+            // ===== Horizontal grid: 0.001 dotted lines, label 0.1 only =====
+            double minorStep = 0.001; // 1/1000
+            double majorLabelStep = 0.1; // 숫자는 1/10 단위만
+
+            int minorCount = (int)Math.Round((maxTemp - minTemp) / minorStep);
+            for (int i = 0; i <= minorCount; i++)
             {
-                components.Dispose();
+                double v = minTemp + (i * minorStep);
+                float y = plot.Bottom - (float)((v - minTemp) / (maxTemp - minTemp) * plot.Height);
+
+                // 0.001은 점선
+                g.DrawLine(gridMinor, plot.Left, y, plot.Right, y);
+
+                // 라벨은 0.1 간격만 (부동소수 오차 방지)
+                if (Math.Abs((v / majorLabelStep) - Math.Round(v / majorLabelStep)) < 1e-6)
+                {
+                    // 라벨 라인은 조금 더 진하게
+                    g.DrawLine(gridMajor, plot.Left, y, plot.Right, y);
+
+                    g.DrawString(v.ToString("0.0", CultureInfo.InvariantCulture), axisFont, axisBrush,
+                        new PointF(clientRect.Left + 4, y - 7));
+                }
             }
-            base.Dispose(disposing);
+
+            g.DrawRectangle(axisPen, plot);
+
+            // ===== Right axis labels: ON/OFF only (0 / 1) =====
+            for (int i = 0; i <= 1; i++)
+            {
+                double ov = i;
+                float y = plot.Bottom - (float)((ov - minOnOff) / (maxOnOff - minOnOff) * plot.Height);
+                string text = ov.ToString("0", CultureInfo.InvariantCulture);
+                SizeF sz = g.MeasureString(text, axisFont);
+                g.DrawString(text, axisFont, axisBrush, new PointF(clientRect.Right - sz.Width - 6, y - 7));
+            }
+
+            // ===== Time vertical grid (every minute) =====
+            DateTime tick = new DateTime(minT.Year, minT.Month, minT.Day, minT.Hour, minT.Minute, 0);
+            if (tick < minT) tick = tick.AddMinutes(1);
+
+            using var vGrid = new Pen(Color.Gainsboro, 1);
+            while (tick <= lastT)
+            {
+                float x = XFromTime(plot, minT, lastT, tick);
+                g.DrawLine(vGrid, x, plot.Top, x, plot.Bottom);
+
+                string label = tick.ToString("HH:mm");
+                SizeF sz = g.MeasureString(label, axisFont);
+                g.DrawString(label, axisFont, axisBrush, x - sz.Width / 2, plot.Bottom + 8);
+
+                tick = tick.AddMinutes(1);
+            }
+
+            // ===== Series: UT (red), Offset ON/OFF (green) =====
+            List<(DateTime t, double v)> ut = channel == 1
+                ? _history.Select(h => (h.Timestamp, h.UtCh1)).ToList()
+                : _history.Select(h => (h.Timestamp, h.UtCh2)).ToList();
+
+            bool showOffsetOnOff = channel == 1
+                ? (chkCh1OffsetOnOff != null && chkCh1OffsetOnOff.Checked)
+                : (chkCh2OffsetOnOff != null && chkCh2OffsetOnOff.Checked);
+
+            // ON/OFF 데이터는 "Offset 보정 전체 체크"를 기준으로 0/1로 표시
+            // (만약 채널별 enable이 따로 있으면 여기만 바꾸면 됨)
+            List<(DateTime t, double v)> onoff = _history
+                .Select(h => (h.Timestamp, chkEnableOffsetControl != null && chkEnableOffsetControl.Checked ? 1.0 : 0.0))
+                .ToList();
+
+            using var penUt = new Pen(Color.Firebrick, 2.2f);
+            using var penOnOff = new Pen(Color.SeaGreen, 2.2f);
+
+            DrawSeriesTime(g, plot, ut, minT, lastT, minTemp, maxTemp, penUt);
+
+            if (showOffsetOnOff)
+            {
+                // ON/OFF는 step 느낌이 나게: 값이 바뀌는 순간 수직/수평으로 그리기
+                DrawSeriesTimeStep(g, plot, onoff, minT, lastT, minOnOff, maxOnOff, penOnOff);
+            }
         }
 
-        #region Windows Form Designer generated code
-
-        private void InitializeComponent()
+        private static float XFromTime(Rectangle rect, DateTime minT, DateTime maxT, DateTime t)
         {
-            DataGridViewCellStyle dataGridViewCellStyle1 = new DataGridViewCellStyle();
-            DataGridViewCellStyle dataGridViewCellStyle3 = new DataGridViewCellStyle();
-            DataGridViewCellStyle dataGridViewCellStyle2 = new DataGridViewCellStyle();
-            pnlHeader = new Panel();
-            tlpSetting = new TableLayoutPanel();
-            btnComSetting = new Button();
-            lblHeader = new Label();
-            pnlBacrground = new Panel();
-            pnlCh2Graph = new Panel();
-            pnlCh1Graph = new Panel();
-            tlpbutton = new TableLayoutPanel();
-            lblCh1 = new Label();
-            lblCh1Temperature = new Label();
-            lblCh2 = new Label();
-            lblCh2Temperature = new Label();
-            chkEnableOffsetControl = new CheckBox();
-            btnStart = new Button();
-            lblCh1OffsetTitle = new Label();
-            lblCh1OffsetValue = new Label();
-            nudOffsetCh1 = new NumericUpDown();
-            btnOffsetApplyCh1 = new Button();
-            lblCh2OffsetTitle = new Label();
-            lblCh2OffsetValue = new Label();
-            nudOffsetCh2 = new NumericUpDown();
-            btnOffsetApplyCh2 = new Button();
-            btnStop = new Button();
-            dataGridView1 = new DataGridView();
-            colTimestamp = new DataGridViewTextBoxColumn();
-            colUtCh1 = new DataGridViewTextBoxColumn();
-            colUtCh2 = new DataGridViewTextBoxColumn();
-            colUtTj = new DataGridViewTextBoxColumn();
-            colBath1Pv = new DataGridViewTextBoxColumn();
-            colBath2Pv = new DataGridViewTextBoxColumn();
-            colErr1 = new DataGridViewTextBoxColumn();
-            colErr2 = new DataGridViewTextBoxColumn();
-            colBath1SetTemp = new DataGridViewTextBoxColumn();
-            colBath2SetTemp = new DataGridViewTextBoxColumn();
-            tlpCommStatus = new TableLayoutPanel();
-            lblThermoPortStatus = new Label();
-            pnlHeader.SuspendLayout();
-            tlpSetting.SuspendLayout();
-            pnlBacrground.SuspendLayout();
-            tlpbutton.SuspendLayout();
-            ((System.ComponentModel.ISupportInitialize)nudOffsetCh1).BeginInit();
-            ((System.ComponentModel.ISupportInitialize)nudOffsetCh2).BeginInit();
-            ((System.ComponentModel.ISupportInitialize)dataGridView1).BeginInit();
-            tlpCommStatus.SuspendLayout();
-            SuspendLayout();
-            // 
-            // pnlHeader
-            // 
-            pnlHeader.BackColor = SystemColors.Control;
-            pnlHeader.Controls.Add(tlpSetting);
-            pnlHeader.Controls.Add(lblHeader);
-            pnlHeader.Location = new Point(10, 10);
-            pnlHeader.Name = "pnlHeader";
-            pnlHeader.Size = new Size(1453, 65);
-            pnlHeader.TabIndex = 0;
-            pnlHeader.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            // 
-            // tlpSetting
-            // 
-            tlpSetting.BackColor = Color.White;
-            tlpSetting.CellBorderStyle = TableLayoutPanelCellBorderStyle.Single;
-            tlpSetting.ColumnCount = 1;
-            tlpSetting.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            tlpSetting.Controls.Add(btnComSetting, 0, 0);
-            tlpSetting.Location = new Point(1188, 3);
-            tlpSetting.Name = "tlpSetting";
-            tlpSetting.RowCount = 1;
-            tlpSetting.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            tlpSetting.Size = new Size(262, 59);
-            tlpSetting.TabIndex = 4;
-            tlpSetting.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            // 
-            // btnComSetting
-            // 
-            btnComSetting.BackColor = SystemColors.Control;
-            btnComSetting.Font = new Font("Segoe UI Semibold", 14.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            btnComSetting.ForeColor = SystemColors.ControlText;
-            btnComSetting.Location = new Point(4, 4);
-            btnComSetting.Name = "btnComSetting";
-            btnComSetting.Size = new Size(254, 51);
-            btnComSetting.TabIndex = 3;
-            btnComSetting.Text = "Settings";
-            btnComSetting.UseVisualStyleBackColor = false;
-            btnComSetting.Dock = DockStyle.Fill;
-            // 
-            // lblHeader
-            // 
-            lblHeader.AutoSize = true;
-            lblHeader.Font = new Font("Segoe UI", 24F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblHeader.ForeColor = SystemColors.ControlDarkDark;
-            lblHeader.Location = new Point(612, 7);
-            lblHeader.Name = "lblHeader";
-            lblHeader.Size = new Size(377, 65);
-            lblHeader.TabIndex = 1;
-            lblHeader.Text = "항온조 컨트롤러";
-            // 
-            // pnlBacrground
-            // 
-            pnlBacrground.BackColor = Color.White;
-            pnlBacrground.Controls.Add(pnlCh2Graph);
-            pnlBacrground.Controls.Add(pnlCh1Graph);
-            pnlBacrground.Controls.Add(tlpbutton);
-            pnlBacrground.Controls.Add(pnlHeader);
-            pnlBacrground.Controls.Add(dataGridView1);
-            pnlBacrground.Controls.Add(tlpCommStatus);
-            pnlBacrground.Location = new Point(0, 0);
-            pnlBacrground.Name = "pnlBacrground";
-            pnlBacrground.Size = new Size(1471, 1300);
-            pnlBacrground.TabIndex = 7;
-            pnlBacrground.Dock = DockStyle.Fill;
-            pnlBacrground.Margin = new Padding(0);
-            // 
-            // pnlCh2Graph
-            // 
-            pnlCh2Graph.BackColor = Color.White;
-            pnlCh2Graph.BorderStyle = BorderStyle.FixedSingle;
-            pnlCh2Graph.Location = new Point(743, 200);
-            pnlCh2Graph.Name = "pnlCh2Graph";
-            pnlCh2Graph.Size = new Size(720, 424);
-            pnlCh2Graph.TabIndex = 10;
-            pnlCh2Graph.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            // 
-            // pnlCh1Graph
-            // 
-            pnlCh1Graph.BackColor = Color.White;
-            pnlCh1Graph.BorderStyle = BorderStyle.FixedSingle;
-            pnlCh1Graph.Location = new Point(11, 200);
-            pnlCh1Graph.Name = "pnlCh1Graph";
-            pnlCh1Graph.Size = new Size(720, 424);
-            pnlCh1Graph.TabIndex = 9;
-            pnlCh1Graph.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-            // 
-            // tlpbutton
-            // 
-            tlpbutton.CellBorderStyle = TableLayoutPanelCellBorderStyle.Single;
-            tlpbutton.ColumnCount = 9;
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F));
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F));
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F));
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F));
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F));
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F));
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F));
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11F));
-            tlpbutton.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 12F));
-            tlpbutton.Controls.Add(lblCh1, 0, 0);
-            tlpbutton.Controls.Add(lblCh1Temperature, 1, 0);
-            tlpbutton.Controls.Add(lblCh2, 4, 0);
-            tlpbutton.Controls.Add(lblCh2Temperature, 5, 0);
-            tlpbutton.Controls.Add(chkEnableOffsetControl, 7, 0);
-            tlpbutton.Controls.Add(btnStart, 8, 0);
-            tlpbutton.Controls.Add(lblCh1OffsetTitle, 0, 1);
-            tlpbutton.Controls.Add(lblCh1OffsetValue, 1, 1);
-            tlpbutton.Controls.Add(nudOffsetCh1, 2, 1);
-            tlpbutton.Controls.Add(btnOffsetApplyCh1, 3, 1);
-            tlpbutton.Controls.Add(lblCh2OffsetTitle, 4, 1);
-            tlpbutton.Controls.Add(lblCh2OffsetValue, 5, 1);
-            tlpbutton.Controls.Add(nudOffsetCh2, 6, 1);
-            tlpbutton.Controls.Add(btnOffsetApplyCh2, 7, 1);
-            tlpbutton.Controls.Add(btnStop, 8, 1);
-            tlpbutton.Location = new Point(11, 87);
-            tlpbutton.Name = "tlpbutton";
-            tlpbutton.RowCount = 2;
-            tlpbutton.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-            tlpbutton.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-            tlpbutton.Size = new Size(1452, 101);
-            tlpbutton.TabIndex = 7;
-            tlpbutton.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            // 
-            // lblCh1
-            // 
-            lblCh1.BackColor = SystemColors.Control;
-            lblCh1.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh1.Location = new Point(4, 1);
-            lblCh1.Name = "lblCh1";
-            lblCh1.Size = new Size(150, 49);
-            lblCh1.TabIndex = 15;
-            lblCh1.Text = "CH1";
-            lblCh1.TextAlign = ContentAlignment.MiddleCenter;
-            lblCh1.Dock = DockStyle.Fill;
-            // 
-            // lblCh1Temperature
-            // 
-            lblCh1Temperature.BackColor = SystemColors.Control;
-            lblCh1Temperature.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh1Temperature.Location = new Point(163, 1);
-            lblCh1Temperature.Name = "lblCh1Temperature";
-            lblCh1Temperature.Size = new Size(152, 49);
-            lblCh1Temperature.TabIndex = 17;
-            lblCh1Temperature.Text = "0";
-            lblCh1Temperature.TextAlign = ContentAlignment.MiddleCenter;
-            lblCh1Temperature.Dock = DockStyle.Fill;
-            // 
-            // lblCh2
-            // 
-            lblCh2.BackColor = SystemColors.Control;
-            lblCh2.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh2.Location = new Point(640, 1);
-            lblCh2.Name = "lblCh2";
-            lblCh2.Size = new Size(150, 49);
-            lblCh2.TabIndex = 16;
-            lblCh2.Text = "CH2";
-            lblCh2.TextAlign = ContentAlignment.MiddleCenter;
-            lblCh2.Dock = DockStyle.Fill;
-            // 
-            // lblCh2Temperature
-            // 
-            lblCh2Temperature.BackColor = SystemColors.Control;
-            lblCh2Temperature.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh2Temperature.Location = new Point(799, 1);
-            lblCh2Temperature.Name = "lblCh2Temperature";
-            lblCh2Temperature.Size = new Size(152, 49);
-            lblCh2Temperature.TabIndex = 18;
-            lblCh2Temperature.Text = "0";
-            lblCh2Temperature.TextAlign = ContentAlignment.MiddleCenter;
-            lblCh2Temperature.Dock = DockStyle.Fill;
-            // 
-            // chkEnableOffsetControl
-            // 
-            chkEnableOffsetControl.BackColor = SystemColors.Control;
-            chkEnableOffsetControl.Font = new Font("Segoe UI Semibold", 12.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            chkEnableOffsetControl.Location = new Point(1114, 1);
-            chkEnableOffsetControl.Margin = new Padding(0);
-            chkEnableOffsetControl.Name = "chkEnableOffsetControl";
-            chkEnableOffsetControl.Size = new Size(158, 49);
-            chkEnableOffsetControl.TabIndex = 25;
-            chkEnableOffsetControl.Text = "Offset 보정";
-            chkEnableOffsetControl.TextAlign = ContentAlignment.MiddleCenter;
-            chkEnableOffsetControl.UseVisualStyleBackColor = false;
-            chkEnableOffsetControl.Dock = DockStyle.Fill;
-            // 
-            // btnStart
-            // 
-            btnStart.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            btnStart.Location = new Point(1276, 4);
-            btnStart.Name = "btnStart";
-            btnStart.Size = new Size(165, 43);
-            btnStart.TabIndex = 13;
-            btnStart.Text = "Start";
-            btnStart.UseVisualStyleBackColor = true;
-            btnStart.Dock = DockStyle.Fill;
-            // 
-            // lblCh1OffsetTitle
-            // 
-            lblCh1OffsetTitle.BackColor = SystemColors.Control;
-            lblCh1OffsetTitle.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh1OffsetTitle.Location = new Point(4, 51);
-            lblCh1OffsetTitle.Name = "lblCh1OffsetTitle";
-            lblCh1OffsetTitle.Size = new Size(150, 49);
-            lblCh1OffsetTitle.TabIndex = 19;
-            lblCh1OffsetTitle.Text = "CH1 Off";
-            lblCh1OffsetTitle.TextAlign = ContentAlignment.MiddleCenter;
-            lblCh1OffsetTitle.Dock = DockStyle.Fill;
-            // 
-            // lblCh1OffsetValue
-            // 
-            lblCh1OffsetValue.BackColor = SystemColors.Control;
-            lblCh1OffsetValue.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh1OffsetValue.Location = new Point(163, 51);
-            lblCh1OffsetValue.Name = "lblCh1OffsetValue";
-            lblCh1OffsetValue.Size = new Size(152, 49);
-            lblCh1OffsetValue.TabIndex = 20;
-            lblCh1OffsetValue.Text = "0.0";
-            lblCh1OffsetValue.TextAlign = ContentAlignment.MiddleCenter;
-            lblCh1OffsetValue.Dock = DockStyle.Fill;
-            // 
-            // nudOffsetCh1
-            // 
-            nudOffsetCh1.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            nudOffsetCh1.Location = new Point(322, 54);
-            nudOffsetCh1.Name = "nudOffsetCh1";
-            nudOffsetCh1.Size = new Size(152, 61);
-            nudOffsetCh1.TabIndex = 11;
-            nudOffsetCh1.Dock = DockStyle.Fill;
-            // 
-            // btnOffsetApplyCh1
-            // 
-            btnOffsetApplyCh1.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            btnOffsetApplyCh1.Location = new Point(481, 54);
-            btnOffsetApplyCh1.Name = "btnOffsetApplyCh1";
-            btnOffsetApplyCh1.Size = new Size(152, 43);
-            btnOffsetApplyCh1.TabIndex = 12;
-            btnOffsetApplyCh1.Text = "Apply";
-            btnOffsetApplyCh1.UseVisualStyleBackColor = true;
-            btnOffsetApplyCh1.Dock = DockStyle.Fill;
-            // 
-            // lblCh2OffsetTitle
-            // 
-            lblCh2OffsetTitle.BackColor = SystemColors.Control;
-            lblCh2OffsetTitle.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh2OffsetTitle.Location = new Point(640, 51);
-            lblCh2OffsetTitle.Name = "lblCh2OffsetTitle";
-            lblCh2OffsetTitle.Size = new Size(150, 49);
-            lblCh2OffsetTitle.TabIndex = 21;
-            lblCh2OffsetTitle.Text = "CH2 Off";
-            lblCh2OffsetTitle.TextAlign = ContentAlignment.MiddleCenter;
-            lblCh2OffsetTitle.Dock = DockStyle.Fill;
-            // 
-            // lblCh2OffsetValue
-            // 
-            lblCh2OffsetValue.BackColor = SystemColors.Control;
-            lblCh2OffsetValue.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh2OffsetValue.Location = new Point(799, 51);
-            lblCh2OffsetValue.Name = "lblCh2OffsetValue";
-            lblCh2OffsetValue.Size = new Size(152, 49);
-            lblCh2OffsetValue.TabIndex = 22;
-            lblCh2OffsetValue.Text = "0.0";
-            lblCh2OffsetValue.TextAlign = ContentAlignment.MiddleCenter;
-            lblCh2OffsetValue.Dock = DockStyle.Fill;
-            // 
-            // nudOffsetCh2
-            // 
-            nudOffsetCh2.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            nudOffsetCh2.Location = new Point(958, 54);
-            nudOffsetCh2.Name = "nudOffsetCh2";
-            nudOffsetCh2.Size = new Size(152, 61);
-            nudOffsetCh2.TabIndex = 23;
-            nudOffsetCh2.Dock = DockStyle.Fill;
-            // 
-            // btnOffsetApplyCh2
-            // 
-            btnOffsetApplyCh2.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            btnOffsetApplyCh2.Location = new Point(1117, 54);
-            btnOffsetApplyCh2.Name = "btnOffsetApplyCh2";
-            btnOffsetApplyCh2.Size = new Size(152, 43);
-            btnOffsetApplyCh2.TabIndex = 24;
-            btnOffsetApplyCh2.Text = "Apply";
-            btnOffsetApplyCh2.UseVisualStyleBackColor = true;
-            btnOffsetApplyCh2.Dock = DockStyle.Fill;
-            // 
-            // btnStop
-            // 
-            btnStop.Font = new Font("Segoe UI Semibold", 20.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            btnStop.Location = new Point(1276, 54);
-            btnStop.Name = "btnStop";
-            btnStop.Size = new Size(165, 43);
-            btnStop.TabIndex = 14;
-            btnStop.Text = "Stop";
-            btnStop.UseVisualStyleBackColor = true;
-            btnStop.Dock = DockStyle.Fill;
-            // 
-            // dataGridView1
-            // 
-            dataGridView1.AllowUserToAddRows = false;
-            dataGridView1.AllowUserToDeleteRows = false;
-            dataGridView1.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells;
-            dataGridView1.BackgroundColor = SystemColors.Control;
-            dataGridViewCellStyle1.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            dataGridViewCellStyle1.BackColor = SystemColors.Control;
-            dataGridViewCellStyle1.Font = new Font("Segoe UI", 12.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            dataGridViewCellStyle1.ForeColor = SystemColors.WindowText;
-            dataGridViewCellStyle1.SelectionBackColor = SystemColors.Highlight;
-            dataGridViewCellStyle1.SelectionForeColor = SystemColors.HighlightText;
-            dataGridViewCellStyle1.WrapMode = DataGridViewTriState.False;
-            dataGridView1.ColumnHeadersDefaultCellStyle = dataGridViewCellStyle1;
-            dataGridView1.ColumnHeadersHeight = 40;
-            dataGridView1.Columns.AddRange(new DataGridViewColumn[] { colTimestamp, colUtCh1, colUtCh2, colUtTj, colBath1Pv, colBath2Pv, colErr1, colErr2, colBath1SetTemp, colBath2SetTemp });
-            dataGridViewCellStyle3.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            dataGridViewCellStyle3.BackColor = SystemColors.Window;
-            dataGridViewCellStyle3.Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
-            dataGridViewCellStyle3.ForeColor = SystemColors.ControlText;
-            dataGridViewCellStyle3.SelectionBackColor = SystemColors.Highlight;
-            dataGridViewCellStyle3.SelectionForeColor = SystemColors.HighlightText;
-            dataGridViewCellStyle3.WrapMode = DataGridViewTriState.False;
-            dataGridView1.DefaultCellStyle = dataGridViewCellStyle3;
-            dataGridView1.EnableHeadersVisualStyles = false;
-            dataGridView1.Location = new Point(11, 638);
-            dataGridView1.Name = "dataGridView1";
-            dataGridView1.ReadOnly = true;
-            dataGridView1.RowHeadersVisible = false;
-            dataGridView1.RowHeadersWidth = 62;
-            dataGridView1.Size = new Size(1452, 601);
-            dataGridView1.TabIndex = 0;
-            dataGridView1.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-            // 
-            // colTimestamp
-            // 
-            dataGridViewCellStyle2.Alignment = DataGridViewContentAlignment.MiddleLeft;
-            colTimestamp.DefaultCellStyle = dataGridViewCellStyle2;
-            colTimestamp.HeaderText = "시간";
-            colTimestamp.MinimumWidth = 210;
-            colTimestamp.Name = "colTimestamp";
-            colTimestamp.ReadOnly = true;
-            colTimestamp.Width = 230;
-            // 
-            // colUtCh1
-            // 
-            colUtCh1.HeaderText = "UT1";
-            colUtCh1.MinimumWidth = 8;
-            colUtCh1.Name = "colUtCh1";
-            colUtCh1.ReadOnly = true;
-            colUtCh1.Width = 130;
-            // 
-            // colUtCh2
-            // 
-            colUtCh2.HeaderText = "UT2";
-            colUtCh2.MinimumWidth = 8;
-            colUtCh2.Name = "colUtCh2";
-            colUtCh2.ReadOnly = true;
-            colUtCh2.Width = 130;
-            // 
-            // colUtTj
-            // 
-            colUtTj.HeaderText = "TJ";
-            colUtTj.MinimumWidth = 8;
-            colUtTj.Name = "colUtTj";
-            colUtTj.ReadOnly = true;
-            colUtTj.Width = 130;
-            // 
-            // colBath1Pv
-            // 
-            colBath1Pv.HeaderText = "B1 PV";
-            colBath1Pv.MinimumWidth = 8;
-            colBath1Pv.Name = "colBath1Pv";
-            colBath1Pv.ReadOnly = true;
-            colBath1Pv.Width = 130;
-            // 
-            // colBath2Pv
-            // 
-            colBath2Pv.HeaderText = "B2 PV";
-            colBath2Pv.MinimumWidth = 8;
-            colBath2Pv.Name = "colBath2Pv";
-            colBath2Pv.ReadOnly = true;
-            colBath2Pv.Width = 130;
-            // 
-            // colErr1
-            // 
-            colErr1.HeaderText = "Err1";
-            colErr1.MinimumWidth = 8;
-            colErr1.Name = "colErr1";
-            colErr1.ReadOnly = true;
-            colErr1.Width = 130;
-            // 
-            // colErr2
-            // 
-            colErr2.HeaderText = "Err2";
-            colErr2.MinimumWidth = 8;
-            colErr2.Name = "colErr2";
-            colErr2.ReadOnly = true;
-            colErr2.Width = 130;
-            // 
-            // colBath1SetTemp
-            // 
-            colBath1SetTemp.HeaderText = "B1 Set";
-            colBath1SetTemp.MinimumWidth = 8;
-            colBath1SetTemp.Name = "colBath1SetTemp";
-            colBath1SetTemp.ReadOnly = true;
-            colBath1SetTemp.Width = 130;
-            // 
-            // colBath2SetTemp
-            // 
-            colBath2SetTemp.HeaderText = "B2 Set";
-            colBath2SetTemp.MinimumWidth = 8;
-            colBath2SetTemp.Name = "colBath2SetTemp";
-            colBath2SetTemp.ReadOnly = true;
-            colBath2SetTemp.Width = 130;
-            // 
-            // tlpCommStatus
-            // 
-            tlpCommStatus.BackColor = SystemColors.Control;
-            tlpCommStatus.CellBorderStyle = TableLayoutPanelCellBorderStyle.Single;
-            tlpCommStatus.ColumnCount = 1;
-            tlpCommStatus.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            tlpCommStatus.Controls.Add(lblThermoPortStatus, 0, 0);
-            tlpCommStatus.Location = new Point(10, 1252);
-            tlpCommStatus.Name = "tlpCommStatus";
-            tlpCommStatus.RowCount = 1;
-            tlpCommStatus.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            tlpCommStatus.Size = new Size(1453, 36);
-            tlpCommStatus.TabIndex = 8;
-            tlpCommStatus.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-            // 
-            // lblThermoPortStatus
-            // 
-            lblThermoPortStatus.Dock = DockStyle.Fill;
-            lblThermoPortStatus.Font = new Font("Segoe UI Semibold", 12.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblThermoPortStatus.ForeColor = Color.Gray;
-            lblThermoPortStatus.Location = new Point(1, 1);
-            lblThermoPortStatus.Margin = new Padding(0);
-            lblThermoPortStatus.Name = "lblThermoPortStatus";
-            lblThermoPortStatus.Size = new Size(1451, 34);
-            lblThermoPortStatus.TabIndex = 2;
-            lblThermoPortStatus.Text = "BOARD";
-            lblThermoPortStatus.TextAlign = ContentAlignment.MiddleCenter;
-            // 
-            // FormMain
-            // 
-            AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(1481, 1308);
-            Controls.Add(pnlBacrground);
-            Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
-            Name = "FormMain";
-            StartPosition = FormStartPosition.CenterScreen;
-            Text = "ThermoBathCalibrator";
-            pnlHeader.ResumeLayout(false);
-            pnlHeader.PerformLayout();
-            tlpSetting.ResumeLayout(false);
-            pnlBacrground.ResumeLayout(false);
-            tlpbutton.ResumeLayout(false);
-            ((System.ComponentModel.ISupportInitialize)nudOffsetCh1).EndInit();
-            ((System.ComponentModel.ISupportInitialize)nudOffsetCh2).EndInit();
-            ((System.ComponentModel.ISupportInitialize)dataGridView1).EndInit();
-            tlpCommStatus.ResumeLayout(false);
-            ResumeLayout(false);
+            double spanSec = (maxT - minT).TotalSeconds;
+            if (spanSec <= 0.001) return rect.Right;
+
+            double xRatio = (t - minT).TotalSeconds / spanSec;
+            if (xRatio < 0) xRatio = 0;
+            if (xRatio > 1) xRatio = 1;
+
+            return rect.Left + (float)(xRatio * rect.Width);
         }
 
-        #endregion
+        private void DrawSeriesTime(Graphics g, Rectangle rect, List<(DateTime t, double v)> values,
+            DateTime minT, DateTime maxT, double minY, double maxY, Pen pen)
+        {
+            if (values == null || values.Count < 2) return;
 
-        private Panel pnlHeader;
-        private Label lblHeader;
-        private Button btnComSetting;
-        private Panel pnlBacrground;
-        private DataGridView dataGridView1;
-        private TableLayoutPanel tlpbutton;
-        private TableLayoutPanel tlpSetting;
+            PointF? prev = null;
 
-        private TableLayoutPanel tlpCommStatus;
-        private Label lblThermoPortStatus;
+            for (int i = 0; i < values.Count; i++)
+            {
+                DateTime t = values[i].t;
+                if (t < minT || t > maxT) continue;
 
-        private Panel pnlCh2Graph;
-        private Panel pnlCh1Graph;
+                double v = values[i].v;
+                if (double.IsNaN(v) || double.IsInfinity(v))
+                {
+                    prev = null;
+                    continue;
+                }
 
-        private Label lblCh2Temperature;
-        private Label lblCh1Temperature;
-        private Button btnStart;
-        private Button btnStop;
-        private Label lblCh1;
-        private Label lblCh2;
+                float x = XFromTime(rect, minT, maxT, t);
+                float yRatio = (float)((v - minY) / (maxY - minY));
+                float y = rect.Bottom - yRatio * rect.Height;
 
-        // CH1 Offset UI
-        private Label lblCh1OffsetTitle;
-        private Label lblCh1OffsetValue;
-        private NumericUpDown nudOffsetCh1;
-        private Button btnOffsetApplyCh1;
+                var pt = new PointF(x, y);
 
-        // CH2 Offset UI
-        private Label lblCh2OffsetTitle;
-        private Label lblCh2OffsetValue;
-        private NumericUpDown nudOffsetCh2;
-        private Button btnOffsetApplyCh2;
+                if (prev.HasValue)
+                    g.DrawLine(pen, prev.Value, pt);
 
-        // Offset enable checkbox
-        private CheckBox chkEnableOffsetControl;
+                prev = pt;
+            }
+        }
 
-        private DataGridViewTextBoxColumn colTimestamp;
-        private DataGridViewTextBoxColumn colUtCh1;
-        private DataGridViewTextBoxColumn colUtCh2;
-        private DataGridViewTextBoxColumn colUtTj;
-        private DataGridViewTextBoxColumn colBath1Pv;
-        private DataGridViewTextBoxColumn colBath2Pv;
-        private DataGridViewTextBoxColumn colErr1;
-        private DataGridViewTextBoxColumn colErr2;
-        private DataGridViewTextBoxColumn colBath1SetTemp;
-        private DataGridViewTextBoxColumn colBath2SetTemp;
+        // ON/OFF 같은 계단형 표시용
+        private void DrawSeriesTimeStep(Graphics g, Rectangle rect, List<(DateTime t, double v)> values,
+            DateTime minT, DateTime maxT, double minY, double maxY, Pen pen)
+        {
+            if (values == null || values.Count < 2) return;
+
+            PointF? prev = null;
+            double? prevV = null;
+
+            for (int i = 0; i < values.Count; i++)
+            {
+                DateTime t = values[i].t;
+                if (t < minT || t > maxT) continue;
+
+                double v = values[i].v;
+                if (double.IsNaN(v) || double.IsInfinity(v))
+                {
+                    prev = null;
+                    prevV = null;
+                    continue;
+                }
+
+                float x = XFromTime(rect, minT, maxT, t);
+                float yRatio = (float)((v - minY) / (maxY - minY));
+                float y = rect.Bottom - yRatio * rect.Height;
+
+                var pt = new PointF(x, y);
+
+                if (prev.HasValue && prevV.HasValue)
+                {
+                    // 수평(이전값 유지)
+                    g.DrawLine(pen, prev.Value, new PointF(pt.X, prev.Value.Y));
+                    // 수직(값 변경)
+                    if (Math.Abs(v - prevV.Value) > 1e-9)
+                        g.DrawLine(pen, new PointF(pt.X, prev.Value.Y), pt);
+                }
+
+                prev = pt;
+                prevV = v;
+            }
+        }
+
+        private void EnableDoubleBuffer(Control c)
+        {
+            PropertyInfo prop = typeof(Control).GetProperty("DoubleBuffered", BindingFlags.Instance | BindingFlags.NonPublic);
+            prop?.SetValue(c, true, null);
+        }
     }
 }

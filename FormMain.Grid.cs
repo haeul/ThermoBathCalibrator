@@ -13,13 +13,13 @@ namespace ThermoBathCalibrator
                 ts,
                 ToCell(r.UtCh1, fmtTemp),
                 ToCell(r.UtCh2, fmtTemp),
-                ToCell(r.UtTj, fmtTemp),
-                ToCell(r.Bath1Pv, fmtTemp),
-                ToCell(r.Bath2Pv, fmtTemp),
+                ToCell(r.Max, fmtTemp),
+                ToCell(r.Min, fmtTemp),
+                ToCell(r.Average, fmtTemp),
                 ToCell(r.Err1, fmtTemp),
                 ToCell(r.Err2, fmtTemp),
-                ToCell(r.Bath1SetTemp, fmtTemp),
-                ToCell(r.Bath2SetTemp, fmtTemp)
+                ToCell(r.Bath1OffsetCur, "0.0"),
+                ToCell(r.Bath2OffsetCur, "0.0")
             );
 
             if (dataGridView1.Rows.Count > MaxGridRows)

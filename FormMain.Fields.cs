@@ -94,8 +94,17 @@ namespace ThermoBathCalibrator
 
         // 그래프 스케일
         private const bool UseFixedGraphScale = true;
-        private const double FixedGraphMinY = 24.0;
-        private const double FixedGraphMaxY = 26.0;
+        private const double FixedGraphMinY = 24.8;
+        private const double FixedGraphMaxY = 25.2;
+        private const double FixedOffsetMinY = -1.0;
+        private const double FixedOffsetMaxY = 1.0;
+
+        // 일별 통계(rolling)
+        private DateTime _dailyStatsDay = DateTime.MinValue;
+        private double _dailyMax = double.NaN;
+        private double _dailyMin = double.NaN;
+        private double _dailySum;
+        private int _dailyCount;
 
         // Modbus 레지스터
         private const ushort RegReadStart = 0;
