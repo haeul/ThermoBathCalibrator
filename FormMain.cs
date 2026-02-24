@@ -291,6 +291,8 @@ namespace ThermoBathCalibrator
 
             using (var dlg = new FormAdminSettings(_utBiasCh1, _utBiasCh2, _bath1FineTarget, _bath2FineTarget))
             {
+                dlg.FormClosed += (_, __) => _isAdminAuthenticated = false;
+
                 if (dlg.ShowDialog(this) != DialogResult.OK)
                     return;
 

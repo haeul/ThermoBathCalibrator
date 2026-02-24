@@ -561,7 +561,8 @@ namespace ThermoBathCalibrator
 
         private static double ToCoarseSv(double fineTarget)
         {
-            return Math.Round(fineTarget, 1, MidpointRounding.AwayFromZero);
+            decimal scaled = decimal.Truncate((decimal)fineTarget * 10m);
+            return (double)(scaled / 10m);
         }
 
         private void UpdateFineTargetAndMaybeWriteCoarse(int channel, double fineTarget, string reason)
