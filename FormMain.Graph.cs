@@ -27,70 +27,61 @@ namespace ThermoBathCalibrator
             using var borderPen = new Pen(Color.Silver, 1);
             g.DrawRectangle(borderPen, new Rectangle(clientRect.Left, clientRect.Top, clientRect.Width - 1, clientRect.Height - 1));
 
-            if (_history == null || _history.Count < 2)
+            Rectangle plot = new Rectangle(clientRect.Left + 48, clientRect.Top + 14, clientRect.Width - 108, clientRect.Height - 44);
+            if (plot.Width < 20 || plot.Height < 20)
                 return;
 
-            // plot area
-            Rectangle plot = clientRect;
-            plot.Inflate(-60, -46); // 좌/우/상/하 여백 조금 더
-
-            DateTime lastT = _history[_history.Count - 1].Timestamp;
+            DateTime lastT = DateTime.Now;
             DateTime minT = lastT - GraphWindow;
-            DateTime firstT = _history[0].Timestamp;
-            if (firstT > minT) minT = firstT;
+            if (_history.Count > 0)
+            {
+                lastT = _history[_history.Count - 1].Timestamp;
+                minT = lastT - GraphWindow;
+                DateTime firstT = _history[0].Timestamp;
+                if (firstT > minT) minT = firstT;
+            }
 
-            // ===== Temp axis (left) =====
-            double minTemp = UseFixedGraphScale ? FixedGraphMinY : 24.8;
-            double maxTemp = UseFixedGraphScale ? FixedGraphMaxY : 25.2;
+            double minTemp = FixedGraphMinY;
+            double maxTemp = FixedGraphMaxY;
+            double minOffset = FixedOffsetMinY;
+            double maxOffset = FixedOffsetMaxY;
 
-            // ===== ON/OFF axis (right) =====
-            double minOnOff = 0.0;
-            double maxOnOff = 1.0;
-
-            using var gridMinor = new Pen(Color.Gainsboro, 1) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot };
+            using var gridMinor = new Pen(Color.Gainsboro, 1);
             using var gridMajor = new Pen(Color.LightGray, 1.2f);
             using var axisPen = new Pen(Color.Gray, 1);
-
             using var axisFont = new Font("Segoe UI", 8, FontStyle.Regular);
             using var axisBrush = new SolidBrush(Color.DimGray);
 
-            // ===== Horizontal grid: 0.001 dotted lines, label 0.1 only =====
-            double minorStep = 0.001; // 1/1000
-            double majorLabelStep = 0.1; // 숫자는 1/10 단위만
+            // ===== 요구사항 반영 =====
+            // - 격자: 0.001 (1/1000)
+            // - 라벨/굵은선: 0.01 (1/100)
+            const double minorStep = 0.01;
+            const double majorStep = 0.01;
 
             int minorCount = (int)Math.Round((maxTemp - minTemp) / minorStep);
+            if (minorCount < 1) minorCount = 1;
+
             for (int i = 0; i <= minorCount; i++)
             {
                 double v = minTemp + (i * minorStep);
                 float y = plot.Bottom - (float)((v - minTemp) / (maxTemp - minTemp) * plot.Height);
 
-                // 0.001은 점선
-                g.DrawLine(gridMinor, plot.Left, y, plot.Right, y);
+                bool isMajor = Math.Abs((v / majorStep) - Math.Round(v / majorStep)) < 1e-6;
+                g.DrawLine(isMajor ? gridMajor : gridMinor, plot.Left, y, plot.Right, y);
 
-                // 라벨은 0.1 간격만 (부동소수 오차 방지)
-                if (Math.Abs((v / majorLabelStep) - Math.Round(v / majorLabelStep)) < 1e-6)
+                // 라벨은 0.01 간격으로만 찍고, 표기는 소수 2자리
+                if (isMajor)
                 {
-                    // 라벨 라인은 조금 더 진하게
-                    g.DrawLine(gridMajor, plot.Left, y, plot.Right, y);
-
-                    g.DrawString(v.ToString("0.0", CultureInfo.InvariantCulture), axisFont, axisBrush,
+                    g.DrawString(v.ToString("0.00", CultureInfo.InvariantCulture), axisFont, axisBrush,
                         new PointF(clientRect.Left + 4, y - 7));
                 }
             }
 
             g.DrawRectangle(axisPen, plot);
 
-            // ===== Right axis labels: ON/OFF only (0 / 1) =====
-            for (int i = 0; i <= 1; i++)
-            {
-                double ov = i;
-                float y = plot.Bottom - (float)((ov - minOnOff) / (maxOnOff - minOnOff) * plot.Height);
-                string text = ov.ToString("0", CultureInfo.InvariantCulture);
-                SizeF sz = g.MeasureString(text, axisFont);
-                g.DrawString(text, axisFont, axisBrush, new PointF(clientRect.Right - sz.Width - 6, y - 7));
-            }
+            // 우측 offset 축 (라벨 - 제거는 DrawRightOffsetAxis에서 처리)
+            DrawRightOffsetAxis(g, axisFont, axisBrush, plot, clientRect.Right - 42, minOffset, maxOffset);
 
-            // ===== Time vertical grid (every minute) =====
             DateTime tick = new DateTime(minT.Year, minT.Month, minT.Day, minT.Hour, minT.Minute, 0);
             if (tick < minT) tick = tick.AddMinutes(1);
 
@@ -107,30 +98,46 @@ namespace ThermoBathCalibrator
                 tick = tick.AddMinutes(1);
             }
 
-            // ===== Series: UT (red), Offset ON/OFF (green) =====
+            if (_history.Count < 2)
+                return;
+
+            // ===== Series: UT (red), Offset (green) =====
             List<(DateTime t, double v)> ut = channel == 1
                 ? _history.Select(h => (h.Timestamp, h.UtCh1)).ToList()
                 : _history.Select(h => (h.Timestamp, h.UtCh2)).ToList();
 
-            bool showOffsetOnOff = channel == 1
-                ? (chkCh1OffsetOnOff != null && chkCh1OffsetOnOff.Checked)
-                : (chkCh2OffsetOnOff != null && chkCh2OffsetOnOff.Checked);
+            List<(DateTime t, double v)> offsets = channel == 1
+                ? _history.Select(h => (h.Timestamp, h.Bath1OffsetCur)).ToList()
+                : _history.Select(h => (h.Timestamp, h.Bath2OffsetCur)).ToList();
 
-            // ON/OFF 데이터는 "Offset 보정 전체 체크"를 기준으로 0/1로 표시
-            // (만약 채널별 enable이 따로 있으면 여기만 바꾸면 됨)
-            List<(DateTime t, double v)> onoff = _history
-                .Select(h => (h.Timestamp, chkEnableOffsetControl != null && chkEnableOffsetControl.Checked ? 1.0 : 0.0))
-                .ToList();
+            bool showOffset = channel == 1 ? chkShowOffsetCh1.Checked : chkShowOffsetCh2.Checked;
 
-            using var penUt = new Pen(Color.Firebrick, 2.2f);
-            using var penOnOff = new Pen(Color.SeaGreen, 2.2f);
+            using var penUt = new Pen(Color.Firebrick, 2.0f);
+            using var penOffset = new Pen(Color.SeaGreen, 2.0f);
 
             DrawSeriesTime(g, plot, ut, minT, lastT, minTemp, maxTemp, penUt);
 
-            if (showOffsetOnOff)
+            if (showOffset)
+                DrawSeriesTime(g, plot, offsets, minT, lastT, minOffset, maxOffset, penOffset);
+        }
+        private void DrawRightOffsetAxis(Graphics g, Font axisFont, Brush axisBrush, Rectangle plot, int axisX, double minOffset, double maxOffset)
+        {
+            const double step = 0.1;
+
+            int count = (int)Math.Round((maxOffset - minOffset) / step);
+            if (count < 1) count = 1;
+
+            for (int i = 0; i <= count; i++)
             {
-                // ON/OFF는 step 느낌이 나게: 값이 바뀌는 순간 수직/수평으로 그리기
-                DrawSeriesTimeStep(g, plot, onoff, minT, lastT, minOnOff, maxOnOff, penOnOff);
+                double offset = minOffset + i * step;
+
+                float y = plot.Bottom - (float)((offset - minOffset) / (maxOffset - minOffset) * plot.Height);
+                int tickLen = (i % 2 == 0) ? 6 : 4;
+                g.DrawLine(Pens.Gray, axisX, y, axisX + tickLen, y);
+
+                // 표시만 절대값(마이너스 제거)
+                string text = Math.Abs(offset).ToString("0.0", CultureInfo.InvariantCulture);
+                g.DrawString(text, axisFont, axisBrush, new PointF(axisX + tickLen + 2, y - 7));
             }
         }
 
@@ -165,6 +172,9 @@ namespace ThermoBathCalibrator
                     continue;
                 }
 
+                if (v < minY) v = minY;
+                if (v > maxY) v = maxY;
+
                 float x = XFromTime(rect, minT, maxT, t);
                 float yRatio = (float)((v - minY) / (maxY - minY));
                 float y = rect.Bottom - yRatio * rect.Height;
@@ -175,48 +185,6 @@ namespace ThermoBathCalibrator
                     g.DrawLine(pen, prev.Value, pt);
 
                 prev = pt;
-            }
-        }
-
-        // ON/OFF 같은 계단형 표시용
-        private void DrawSeriesTimeStep(Graphics g, Rectangle rect, List<(DateTime t, double v)> values,
-            DateTime minT, DateTime maxT, double minY, double maxY, Pen pen)
-        {
-            if (values == null || values.Count < 2) return;
-
-            PointF? prev = null;
-            double? prevV = null;
-
-            for (int i = 0; i < values.Count; i++)
-            {
-                DateTime t = values[i].t;
-                if (t < minT || t > maxT) continue;
-
-                double v = values[i].v;
-                if (double.IsNaN(v) || double.IsInfinity(v))
-                {
-                    prev = null;
-                    prevV = null;
-                    continue;
-                }
-
-                float x = XFromTime(rect, minT, maxT, t);
-                float yRatio = (float)((v - minY) / (maxY - minY));
-                float y = rect.Bottom - yRatio * rect.Height;
-
-                var pt = new PointF(x, y);
-
-                if (prev.HasValue && prevV.HasValue)
-                {
-                    // 수평(이전값 유지)
-                    g.DrawLine(pen, prev.Value, new PointF(pt.X, prev.Value.Y));
-                    // 수직(값 변경)
-                    if (Math.Abs(v - prevV.Value) > 1e-9)
-                        g.DrawLine(pen, new PointF(pt.X, prev.Value.Y), pt);
-                }
-
-                prev = pt;
-                prevV = v;
             }
         }
 

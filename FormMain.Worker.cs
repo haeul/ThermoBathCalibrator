@@ -92,9 +92,8 @@ namespace ThermoBathCalibrator
             double bath1Pv = readOk ? snap.Ch1Pv : double.NaN;
             double bath2Pv = readOk ? snap.Ch2Pv : double.NaN;
 
-            double rowMax = MaxOrNaN(utCh1, utCh2);
-            double rowMin = MinOrNaN(utCh1, utCh2);
-            double rowAvg = AverageOrNaN(utCh1, utCh2);
+            var ch1Stats = CalcChannelStats(_history.Select(h => h.UtCh1), utCh1);
+            var ch2Stats = CalcChannelStats(_history.Select(h => h.UtCh2), utCh2); double rowAvg = AverageOrNaN(utCh1, utCh2);
             UpdateDailyStats(now, rowAvg);
 
             if (readOk)
@@ -244,9 +243,12 @@ namespace ThermoBathCalibrator
                 UtCh2 = utCh2,
                 UtTj = utTj,
 
-                Max = rowMax,
-                Min = rowMin,
-                Average = rowAvg,
+                Max1 = ch1Stats.max,
+                Max2 = ch2Stats.max,
+                Min1 = ch1Stats.min,
+                Min2 = ch2Stats.min,
+                Average1 = ch1Stats.avg,
+                Average2 = ch2Stats.avg,
 
                 Bath1Pv = bath1Pv,
                 Bath2Pv = bath2Pv,
@@ -330,6 +332,26 @@ namespace ThermoBathCalibrator
 
             _dailySum += value;
             _dailyCount++;
+        }
+
+        private static (double max, double min, double avg) CalcChannelStats(IEnumerable<double> pastValues, double current)
+        {
+            var values = new List<double>();
+
+            foreach (double v in pastValues)
+            {
+                if (double.IsNaN(v) || double.IsInfinity(v))
+                    continue;
+                values.Add(v);
+            }
+
+            if (!double.IsNaN(current) && !double.IsInfinity(current))
+                values.Add(current);
+
+            if (values.Count == 0)
+                return (double.NaN, double.NaN, double.NaN);
+
+            return (values.Max(), values.Min(), values.Average());
         }
 
         private static double MaxOrNaN(double a, double b)

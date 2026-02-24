@@ -50,6 +50,9 @@ namespace ThermoBathCalibrator
             EnableDoubleBuffer(pnlCh1Graph);
             EnableDoubleBuffer(pnlCh2Graph);
 
+            chkShowOffsetCh1.CheckedChanged += (_, __) => pnlCh1Graph.Invalidate();
+            chkShowOffsetCh2.CheckedChanged += (_, __) => pnlCh2Graph.Invalidate();
+
             LoadMultiBoardSettingsFromDiskIfAny();
             BuildMultiBoardClient();
 

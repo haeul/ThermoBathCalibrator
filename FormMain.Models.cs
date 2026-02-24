@@ -31,9 +31,12 @@ namespace ThermoBathCalibrator
             public double UtCh2 { get; set; }
             public double UtTj { get; set; }
 
-            public double Max { get; set; }
-            public double Min { get; set; }
-            public double Average { get; set; }
+            public double Max1 { get; set; }
+            public double Max2 { get; set; }
+            public double Min1 { get; set; }
+            public double Min2 { get; set; }
+            public double Average1 { get; set; }
+            public double Average2 { get; set; }
 
             public double Bath1Pv { get; set; }
             public double Bath2Pv { get; set; }
