@@ -132,9 +132,9 @@ namespace ThermoBathCalibrator
             // 
             // nudSetpointCh1
             // 
-            nudSetpointCh1.DecimalPlaces = 1;
+            nudSetpointCh1.DecimalPlaces = 2;
             nudSetpointCh1.Dock = DockStyle.Fill;
-            nudSetpointCh1.Increment = 0.1m;
+            nudSetpointCh1.Increment = 0.01m;
             nudSetpointCh1.Location = new Point(177, 96);
             nudSetpointCh1.Margin = new Padding(3, 8, 3, 3);
             nudSetpointCh1.Maximum = new decimal(new int[] { 80, 0, 0, 0 });
@@ -144,9 +144,9 @@ namespace ThermoBathCalibrator
             // 
             // nudSetpointCh2
             // 
-            nudSetpointCh2.DecimalPlaces = 1;
+            nudSetpointCh2.DecimalPlaces = 2;
             nudSetpointCh2.Dock = DockStyle.Fill;
-            nudSetpointCh2.Increment = 0.1m;
+            nudSetpointCh2.Increment = 0.01m;
             nudSetpointCh2.Location = new Point(177, 140);
             nudSetpointCh2.Margin = new Padding(3, 8, 3, 3);
             nudSetpointCh2.Maximum = new decimal(new int[] { 80, 0, 0, 0 });
