@@ -263,38 +263,20 @@ namespace ThermoBathCalibrator
         {
             try
             {
-                using (var dlg = new FormComSetting())
+                using (var dlg = new FormSettings(_host, _port, _unitId, _bath1Setpoint, _bath2Setpoint, TryWriteChannelSvCoarseFromSettings))
                 {
-                    dlg.ShowDialog(this);
+                    if (dlg.ShowDialog(this) != DialogResult.OK)
+                        return;
+
+                    ApplyMultiBoardEndpoint(dlg.AppliedHost, dlg.AppliedPort, dlg.AppliedUnitId);
                 }
 
-                string path = CommSettings.GetDefaultPath();
-                var s = CommSettings.LoadOrDefault(path);
-
-                if (s?.MultiBoard != null)
-                {
-                    string host = (s.MultiBoard.Host ?? "").Trim();
-                    int port = s.MultiBoard.Port;
-                    int unit = s.MultiBoard.UnitId;
-
-                    ApplyMultiBoardEndpoint(host, port, (byte)Math.Max(1, Math.Min(247, unit)));
-
-                    MessageBox.Show(
-                        $"멀티보드 설정 적용: {_host}:{_port} (UnitId={_unitId})",
-                        "COM Settings",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information
-                    );
-                }
-                else
-                {
-                    MessageBox.Show(
-                        "멀티보드 설정을 찾을 수 없습니다. (comm_settings.json 확인)",
-                        "COM Settings",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning
-                    );
-                }
+                MessageBox.Show(
+                    $"멀티보드 설정 적용: {_host}:{_port} (UnitId={_unitId})",
+                    "Settings",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
             }
             catch (Exception ex)
             {
@@ -304,7 +286,10 @@ namespace ThermoBathCalibrator
 
         private void LblHeader_DoubleClick(object? sender, EventArgs e)
         {
-            using (var dlg = new FormAdminSettings(_utBiasCh1, _utBiasCh2, _bath1Setpoint, _bath2Setpoint))
+            if (!EnsureAdminAuthenticated())
+                return;
+
+            using (var dlg = new FormAdminSettings(_utBiasCh1, _utBiasCh2, _bath1FineTarget, _bath2FineTarget))
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK)
                     return;
@@ -312,8 +297,11 @@ namespace ThermoBathCalibrator
                 _utBiasCh1 = dlg.UtBiasCh1;
                 _utBiasCh2 = dlg.UtBiasCh2;
 
-                _bath1Setpoint = dlg.SetpointCh1;
-                _bath2Setpoint = dlg.SetpointCh2;
+                _bath1FineTarget = dlg.SetpointCh1;
+                _bath2FineTarget = dlg.SetpointCh2;
+
+                UpdateFineTargetAndMaybeWriteCoarse(1, _bath1FineTarget, "ADMIN_FINE_TARGET");
+                UpdateFineTargetAndMaybeWriteCoarse(2, _bath2FineTarget, "ADMIN_FINE_TARGET");
 
                 double offset1;
                 double offset2;
@@ -326,9 +314,61 @@ namespace ThermoBathCalibrator
                 _ = TryWriteChannelOffset(1, offset1, "ADMIN_SETPOINT_APPLY");
                 _ = TryWriteChannelOffset(2, offset2, "ADMIN_SETPOINT_APPLY");
 
-                _autoCfg.TargetTemperature = AverageOrNaN(_bath1Setpoint, _bath2Setpoint);
+                _autoCfg.TargetTemperature = AverageOrNaN(_bath1FineTarget, _bath2FineTarget);
                 UpdateStatusLabels();
             }
+        }
+
+        private bool EnsureAdminAuthenticated()
+        {
+            if (_isAdminAuthenticated)
+                return true;
+
+            using (var prompt = new Form())
+            using (var txt = new TextBox())
+            using (var lbl = new Label())
+            using (var btnOk = new Button())
+            using (var btnCancel = new Button())
+            {
+                prompt.Text = "Admin Login";
+                prompt.FormBorderStyle = FormBorderStyle.FixedDialog;
+                prompt.StartPosition = FormStartPosition.CenterParent;
+                prompt.MinimizeBox = false;
+                prompt.MaximizeBox = false;
+                prompt.ClientSize = new Size(320, 130);
+
+                lbl.Text = "관리자 비밀번호";
+                lbl.AutoSize = false;
+                lbl.TextAlign = ContentAlignment.MiddleLeft;
+                lbl.SetBounds(12, 12, 296, 24);
+
+                txt.PasswordChar = '*';
+                txt.SetBounds(12, 40, 296, 31);
+
+                btnOk.Text = "OK";
+                btnOk.DialogResult = DialogResult.OK;
+                btnOk.SetBounds(152, 84, 75, 30);
+
+                btnCancel.Text = "Cancel";
+                btnCancel.DialogResult = DialogResult.Cancel;
+                btnCancel.SetBounds(233, 84, 75, 30);
+
+                prompt.Controls.AddRange(new Control[] { lbl, txt, btnOk, btnCancel });
+                prompt.AcceptButton = btnOk;
+                prompt.CancelButton = btnCancel;
+
+                if (prompt.ShowDialog(this) != DialogResult.OK)
+                    return false;
+
+                if (string.Equals(txt.Text?.Trim(), AdminPassword, StringComparison.Ordinal))
+                {
+                    _isAdminAuthenticated = true;
+                    return true;
+                }
+            }
+
+            MessageBox.Show("비밀번호가 올바르지 않습니다.", "Admin Login", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
         }
 
         private void UpdateAlarmState(double ch1, double ch2)

@@ -13,6 +13,14 @@ namespace ThermoBathCalibrator
         private double _bath1Setpoint = 25.0;
         private double _bath2Setpoint = 25.0;
 
+        private double _bath1FineTarget = double.NaN;
+        private double _bath2FineTarget = double.NaN;
+        private double _trackedCoarseSvCh1 = double.NaN;
+        private double _trackedCoarseSvCh2 = double.NaN;
+
+        private bool _isAdminAuthenticated;
+        private const string AdminPassword = "1234";
+
         private bool _running;
 
         // 자동제어 모듈 (분리됨)

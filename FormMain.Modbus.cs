@@ -81,6 +81,11 @@ namespace ThermoBathCalibrator
             _lastRespCh2 = 0;
 
             _autoCtrl.Reset();
+
+            _bath1FineTarget = _bath1Setpoint;
+            _bath2FineTarget = _bath2Setpoint;
+            _trackedCoarseSvCh1 = _bath1Setpoint;
+            _trackedCoarseSvCh2 = _bath2Setpoint;
         }
 
         private bool TryConnectWithCooldown()
@@ -449,6 +454,140 @@ namespace ThermoBathCalibrator
             }
 
             return true;
+        }
+
+        private bool TryWriteSvSequenceNoAck(
+            int channel,
+            ushort svWord,
+            string reason,
+            short raw10,
+            out string error)
+        {
+            error = string.Empty;
+
+            ushort cmdStart = channel == 1 ? RegCh1Command : RegCh2Command;
+            ushort svReg = (ushort)(cmdStart + 1);
+            const ushort cmd = 0x0001;
+
+            if (!TryWriteSingleRegister(cmdStart, 0, out string errClear))
+            {
+                error = $"CMD_CLEAR_FAIL:{errClear}";
+                return false;
+            }
+
+            if (!TryWriteSingleRegister(svReg, svWord, out string errSvWrite))
+            {
+                error = $"SV_WRITE_FAIL:{errSvWrite}";
+                return false;
+            }
+            TraceModbus($"SV WRITE OK ch={channel} reason={reason} reg={svReg} sv=0x{svWord:X4} raw10={raw10}");
+
+            if (!TryWriteSingleRegister(cmdStart, cmd, out string errCmdUp))
+            {
+                error = $"CMD_UP_FAIL:{errCmdUp}";
+                return false;
+            }
+
+            const int CmdPulseHoldMs = 120;
+            Thread.Sleep(CmdPulseHoldMs);
+
+            if (!TryWriteSingleRegister(cmdStart, 0, out string errCmdDown))
+            {
+                error = $"CMD_DOWN_FAIL:{errCmdDown}";
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool TryWriteChannelSvCoarseInternal(int channel, double coarseSv, string reason)
+        {
+            lock (_offsetWriteSequenceSync)
+            {
+                _inWriteSequence = true;
+                try
+                {
+                    if (!_mb.IsConnected)
+                    {
+                        _boardConnected = TryConnectWithCooldown();
+                        if (!_boardConnected) _boardFailCount++;
+                    }
+
+                    if (!_mb.IsConnected)
+                    {
+                        _boardConnected = false;
+                        TraceModbus($"[SV WRITE RESULT] FAIL reason=not_connected src={reason} channel={channel}");
+                        return false;
+                    }
+
+                    short raw10 = (short)Math.Round(coarseSv * 10.0, MidpointRounding.AwayFromZero);
+                    ushort svWord = unchecked((ushort)raw10);
+
+                    TraceModbus($"[SV WRITE START] src={reason} channel={channel} desired={coarseSv.ToString("0.0", CultureInfo.InvariantCulture)} thread={Thread.CurrentThread.ManagedThreadId}");
+                    TraceModbus("[INFO] ACK disabled - using readback verification only");
+
+                    if (!TryWriteSvSequenceNoAck(channel, svWord, reason, raw10, out string sequenceErr))
+                    {
+                        TraceModbus($"[SV WRITE RESULT] FAIL reason={sequenceErr} src={reason} channel={channel}");
+                        return false;
+                    }
+
+                    if (channel == 1)
+                    {
+                        _bath1Setpoint = coarseSv;
+                        _trackedCoarseSvCh1 = coarseSv;
+                    }
+                    else
+                    {
+                        _bath2Setpoint = coarseSv;
+                        _trackedCoarseSvCh2 = coarseSv;
+                    }
+
+                    TraceModbus($"[SV WRITE RESULT] SUCCESS src={reason} channel={channel} coarse={coarseSv.ToString("0.0", CultureInfo.InvariantCulture)}");
+                    return true;
+                }
+                finally
+                {
+                    _inWriteSequence = false;
+                }
+            }
+        }
+
+        private bool TryWriteChannelSvCoarseFromSettings(int channel, double coarseSv)
+        {
+            coarseSv = Math.Round(coarseSv, 1, MidpointRounding.AwayFromZero);
+            return TryWriteChannelSvCoarseInternal(channel, coarseSv, "SETTINGS_DIRECT_COARSE");
+        }
+
+        private static double ToCoarseSv(double fineTarget)
+        {
+            return Math.Round(fineTarget, 1, MidpointRounding.AwayFromZero);
+        }
+
+        private void UpdateFineTargetAndMaybeWriteCoarse(int channel, double fineTarget, string reason)
+        {
+            double coarse = ToCoarseSv(fineTarget);
+            bool needWrite;
+
+            if (channel == 1)
+            {
+                double prevCoarse = double.IsNaN(_trackedCoarseSvCh1) ? _bath1Setpoint : _trackedCoarseSvCh1;
+                _bath1FineTarget = fineTarget;
+                _autoCfg.TargetTemperature = AverageOrNaN(_bath1FineTarget, _bath2FineTarget);
+                needWrite = double.IsNaN(prevCoarse) || Math.Abs(prevCoarse - coarse) > 0.049;
+            }
+            else
+            {
+                double prevCoarse = double.IsNaN(_trackedCoarseSvCh2) ? _bath2Setpoint : _trackedCoarseSvCh2;
+                _bath2FineTarget = fineTarget;
+                _autoCfg.TargetTemperature = AverageOrNaN(_bath1FineTarget, _bath2FineTarget);
+                needWrite = double.IsNaN(prevCoarse) || Math.Abs(prevCoarse - coarse) > 0.049;
+            }
+
+            if (!needWrite)
+                return;
+
+            _ = TryWriteChannelSvCoarseInternal(channel, coarse, reason);
         }
 
         private bool TryWriteAndWaitAck_Split(

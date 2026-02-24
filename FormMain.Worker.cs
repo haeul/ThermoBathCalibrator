@@ -96,6 +96,12 @@ namespace ThermoBathCalibrator
             {
                 _bath1Setpoint = snap.Ch1Sv;
                 _bath2Setpoint = snap.Ch2Sv;
+
+                if (double.IsNaN(_bath1FineTarget)) _bath1FineTarget = _bath1Setpoint;
+                if (double.IsNaN(_bath2FineTarget)) _bath2FineTarget = _bath2Setpoint;
+
+                _trackedCoarseSvCh1 = _bath1Setpoint;
+                _trackedCoarseSvCh2 = _bath2Setpoint;
             }
 
             // ===== read-back 기반 cur 갱신(정본) =====
@@ -114,9 +120,12 @@ namespace ThermoBathCalibrator
                 TraceModbus("OFFSET READ SKIP readOk=false (cannot compare readback)");
             }
 
-            // err = Setpoint - UT
-            double err1 = (!double.IsNaN(utCh1)) ? (_bath1Setpoint - utCh1) : double.NaN;
-            double err2 = (!double.IsNaN(utCh2)) ? (_bath2Setpoint - utCh2) : double.NaN;
+            double target1 = !double.IsNaN(_bath1FineTarget) ? _bath1FineTarget : _bath1Setpoint;
+            double target2 = !double.IsNaN(_bath2FineTarget) ? _bath2FineTarget : _bath2Setpoint;
+
+            // err = Target - UT
+            double err1 = (!double.IsNaN(utCh1)) ? (target1 - utCh1) : double.NaN;
+            double err2 = (!double.IsNaN(utCh2)) ? (target2 - utCh2) : double.NaN;
 
             double derr1 = (!double.IsNaN(err1) && !double.IsNaN(_prevErr1)) ? (err1 - _prevErr1) : double.NaN;
             double derr2 = (!double.IsNaN(err2) && !double.IsNaN(_prevErr2)) ? (err2 - _prevErr2) : double.NaN;
@@ -168,7 +177,7 @@ namespace ThermoBathCalibrator
                         ut: utCh1,
                         err: err1,
                         currentOffset: currentOffset1,
-                        targetTemperature: _bath1Setpoint,
+                        targetTemperature: target1,
                         tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
                         traceLog: TraceModbus
                     );
@@ -188,7 +197,7 @@ namespace ThermoBathCalibrator
                         ut: utCh2,
                         err: err2,
                         currentOffset: currentOffset2,
-                        targetTemperature: _bath2Setpoint,
+                        targetTemperature: target2,
                         tryWriteOffset: (ch, off, reason) => TryWriteChannelOffset(ch, off, reason),
                         traceLog: TraceModbus
                     );
@@ -217,8 +226,8 @@ namespace ThermoBathCalibrator
                 finalOffset2 = _bath2OffsetCur;
             }
 
-            double bath1SetTemp = (!double.IsNaN(finalOffset1)) ? _bath1Setpoint + finalOffset1 : double.NaN;
-            double bath2SetTemp = (!double.IsNaN(finalOffset2)) ? _bath2Setpoint + finalOffset2 : double.NaN;
+            double bath1SetTemp = (!double.IsNaN(finalOffset1)) ? target1 + finalOffset1 : double.NaN;
+            double bath2SetTemp = (!double.IsNaN(finalOffset2)) ? target2 + finalOffset2 : double.NaN;
 
             _ = stale;
 

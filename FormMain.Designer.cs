@@ -104,7 +104,7 @@ namespace ThermoBathCalibrator
             btnComSetting.Name = "btnComSetting";
             btnComSetting.Size = new Size(254, 51);
             btnComSetting.TabIndex = 3;
-            btnComSetting.Text = "Port Setting";
+            btnComSetting.Text = "Settings";
             btnComSetting.UseVisualStyleBackColor = false;
             btnComSetting.Dock = DockStyle.Fill;
             // 
