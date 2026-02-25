@@ -7,7 +7,7 @@ namespace ThermoBathCalibrator.Controller
         // Smart Bath Control constants (m°C scale)
         private const int DEADBAND_MILLI = 20;            // ±0.02°C
         private const int SLOPE_THRESHOLD_MILLI = 5;      // 0.005°C per tick (1s)
-        private const int MIN_ACTION_INTERVAL_MS = 60000; // 60s
+        private const int MIN_ACTION_INTERVAL_MS = 50000; // 60s
         private const int FOLLOW_UP_THRESHOLD_MILLI = 10; // ±0.01°C
 
         // Fast converge (only when |err| > 0.10°C)
