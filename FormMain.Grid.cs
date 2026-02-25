@@ -19,8 +19,8 @@ namespace ThermoBathCalibrator
                 ToCell(r.Min2, fmtTemp),
                 ToCell(r.Average1, fmtTemp),
                 ToCell(r.Average2, fmtTemp),
-                ToCell(r.Err1, fmtTemp),
-                ToCell(r.Err2, fmtTemp),
+                //ToCell(r.Err1, fmtTemp),
+                //ToCell(r.Err2, fmtTemp),
                 ToCell(r.Bath1OffsetCur, "0.0"),
                 ToCell(r.Bath2OffsetCur, "0.0")
             );

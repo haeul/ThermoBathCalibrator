@@ -69,8 +69,6 @@ namespace ThermoBathCalibrator
             colMin2 = new DataGridViewTextBoxColumn();
             colAverage1 = new DataGridViewTextBoxColumn();
             colAverage2 = new DataGridViewTextBoxColumn();
-            colErr1 = new DataGridViewTextBoxColumn();
-            colErr2 = new DataGridViewTextBoxColumn();
             colOffset1 = new DataGridViewTextBoxColumn();
             colOffset2 = new DataGridViewTextBoxColumn();
             tlpCommStatus = new TableLayoutPanel();
@@ -182,7 +180,7 @@ namespace ThermoBathCalibrator
             btnComSetting.Name = "btnComSetting";
             btnComSetting.Size = new Size(298, 46);
             btnComSetting.TabIndex = 0;
-            btnComSetting.Text = "Settings";
+            btnComSetting.Text = "설정";
             btnComSetting.UseVisualStyleBackColor = false;
             // 
             // tlpTop
@@ -238,7 +236,7 @@ namespace ThermoBathCalibrator
             lblCh1.Name = "lblCh1";
             lblCh1.Size = new Size(122, 53);
             lblCh1.TabIndex = 0;
-            lblCh1.Text = "CH1";
+            lblCh1.Text = "항온조1";
             lblCh1.TextAlign = ContentAlignment.MiddleCenter;
             // 
             // lblCh1Temperature
@@ -265,7 +263,7 @@ namespace ThermoBathCalibrator
             lblCh1OffsetTitle.Name = "lblCh1OffsetTitle";
             lblCh1OffsetTitle.Size = new Size(122, 54);
             lblCh1OffsetTitle.TabIndex = 2;
-            lblCh1OffsetTitle.Text = "CH1 Off";
+            lblCh1OffsetTitle.Text = "항온조1 오프셋";
             lblCh1OffsetTitle.TextAlign = ContentAlignment.MiddleCenter;
             // 
             // lblCh1OffsetValue
@@ -304,7 +302,7 @@ namespace ThermoBathCalibrator
             btnOffsetApplyCh1.Name = "btnOffsetApplyCh1";
             btnOffsetApplyCh1.Size = new Size(103, 42);
             btnOffsetApplyCh1.TabIndex = 5;
-            btnOffsetApplyCh1.Text = "Apply";
+            btnOffsetApplyCh1.Text = "적용";
             // 
             // tlpCh2
             // 
@@ -340,7 +338,7 @@ namespace ThermoBathCalibrator
             lblCh2.Name = "lblCh2";
             lblCh2.Size = new Size(120, 53);
             lblCh2.TabIndex = 0;
-            lblCh2.Text = "CH2";
+            lblCh2.Text = "항온조2";
             lblCh2.TextAlign = ContentAlignment.MiddleCenter;
             // 
             // lblCh2Temperature
@@ -367,7 +365,7 @@ namespace ThermoBathCalibrator
             lblCh2OffsetTitle.Name = "lblCh2OffsetTitle";
             lblCh2OffsetTitle.Size = new Size(120, 54);
             lblCh2OffsetTitle.TabIndex = 2;
-            lblCh2OffsetTitle.Text = "CH2 Off";
+            lblCh2OffsetTitle.Text = "항온조2 오프셋";
             lblCh2OffsetTitle.TextAlign = ContentAlignment.MiddleCenter;
             // 
             // lblCh2OffsetValue
@@ -406,7 +404,7 @@ namespace ThermoBathCalibrator
             btnOffsetApplyCh2.Name = "btnOffsetApplyCh2";
             btnOffsetApplyCh2.Size = new Size(100, 42);
             btnOffsetApplyCh2.TabIndex = 5;
-            btnOffsetApplyCh2.Text = "Apply";
+            btnOffsetApplyCh2.Text = "적용";
             // 
             // tlpGlobal
             // 
@@ -438,7 +436,7 @@ namespace ThermoBathCalibrator
             tlpGlobal.SetRowSpan(chkEnableOffsetControl, 2);
             chkEnableOffsetControl.Size = new Size(91, 108);
             chkEnableOffsetControl.TabIndex = 0;
-            chkEnableOffsetControl.Text = "Offset 보정";
+            chkEnableOffsetControl.Text = "오프셋 보정";
             chkEnableOffsetControl.TextAlign = ContentAlignment.MiddleCenter;
             chkEnableOffsetControl.UseVisualStyleBackColor = false;
             // 
@@ -451,7 +449,7 @@ namespace ThermoBathCalibrator
             btnStart.Name = "btnStart";
             btnStart.Size = new Size(80, 41);
             btnStart.TabIndex = 1;
-            btnStart.Text = "Start";
+            btnStart.Text = "시작";
             // 
             // btnStop
             // 
@@ -462,7 +460,7 @@ namespace ThermoBathCalibrator
             btnStop.Name = "btnStop";
             btnStop.Size = new Size(80, 42);
             btnStop.TabIndex = 2;
-            btnStop.Text = "Stop";
+            btnStop.Text = "중지";
             // 
             // tlpGraphs
             // 
@@ -636,7 +634,7 @@ namespace ThermoBathCalibrator
             dataGridViewCellStyle1.WrapMode = DataGridViewTriState.False;
             dataGridView1.ColumnHeadersDefaultCellStyle = dataGridViewCellStyle1;
             dataGridView1.ColumnHeadersHeight = 40;
-            dataGridView1.Columns.AddRange(new DataGridViewColumn[] { colTimestamp, colUtCh1, colUtCh2, colMax1, colMax2, colMin1, colMin2, colAverage1, colAverage2, colErr1, colErr2, colOffset1, colOffset2 });
+            dataGridView1.Columns.AddRange(new DataGridViewColumn[] { colTimestamp, colUtCh1, colUtCh2, colMax1, colMax2, colMin1, colMin2, colAverage1, colAverage2, colOffset1, colOffset2 });
             dataGridViewCellStyle3.Alignment = DataGridViewContentAlignment.MiddleCenter;
             dataGridViewCellStyle3.BackColor = SystemColors.Window;
             dataGridViewCellStyle3.Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
@@ -660,7 +658,7 @@ namespace ThermoBathCalibrator
             dataGridViewCellStyle2.Alignment = DataGridViewContentAlignment.MiddleLeft;
             colTimestamp.DefaultCellStyle = dataGridViewCellStyle2;
             colTimestamp.FillWeight = 18F;
-            colTimestamp.HeaderText = "Time";
+            colTimestamp.HeaderText = "시간";
             colTimestamp.MinimumWidth = 180;
             colTimestamp.Name = "colTimestamp";
             colTimestamp.ReadOnly = true;
@@ -668,7 +666,7 @@ namespace ThermoBathCalibrator
             // colUtCh1
             // 
             colUtCh1.FillWeight = 9F;
-            colUtCh1.HeaderText = "UT1";
+            colUtCh1.HeaderText = "항온조1";
             colUtCh1.MinimumWidth = 80;
             colUtCh1.Name = "colUtCh1";
             colUtCh1.ReadOnly = true;
@@ -676,7 +674,7 @@ namespace ThermoBathCalibrator
             // colUtCh2
             // 
             colUtCh2.FillWeight = 9F;
-            colUtCh2.HeaderText = "UT2";
+            colUtCh2.HeaderText = "항온조2";
             colUtCh2.MinimumWidth = 80;
             colUtCh2.Name = "colUtCh2";
             colUtCh2.ReadOnly = true;
@@ -684,7 +682,7 @@ namespace ThermoBathCalibrator
             // colMax1
             // 
             colMax1.FillWeight = 9F;
-            colMax1.HeaderText = "Max1";
+            colMax1.HeaderText = "항온조1 최대값";
             colMax1.MinimumWidth = 80;
             colMax1.Name = "colMax1";
             colMax1.ReadOnly = true;
@@ -692,7 +690,7 @@ namespace ThermoBathCalibrator
             // colMax2
             // 
             colMax2.FillWeight = 9F;
-            colMax2.HeaderText = "Max2";
+            colMax2.HeaderText = "항온조2 최대값";
             colMax2.MinimumWidth = 80;
             colMax2.Name = "colMax2";
             colMax2.ReadOnly = true;
@@ -700,7 +698,7 @@ namespace ThermoBathCalibrator
             // colMin1
             // 
             colMin1.FillWeight = 9F;
-            colMin1.HeaderText = "Min1";
+            colMin1.HeaderText = "항온조1 최소값";
             colMin1.MinimumWidth = 80;
             colMin1.Name = "colMin1";
             colMin1.ReadOnly = true;
@@ -708,7 +706,7 @@ namespace ThermoBathCalibrator
             // colMin2
             // 
             colMin2.FillWeight = 9F;
-            colMin2.HeaderText = "Min2";
+            colMin2.HeaderText = "항온조2 최소값";
             colMin2.MinimumWidth = 80;
             colMin2.Name = "colMin2";
             colMin2.ReadOnly = true;
@@ -716,7 +714,7 @@ namespace ThermoBathCalibrator
             // colAverage1
             // 
             colAverage1.FillWeight = 10F;
-            colAverage1.HeaderText = "Average1";
+            colAverage1.HeaderText = "항온조1 평균값";
             colAverage1.MinimumWidth = 90;
             colAverage1.Name = "colAverage1";
             colAverage1.ReadOnly = true;
@@ -724,31 +722,15 @@ namespace ThermoBathCalibrator
             // colAverage2
             // 
             colAverage2.FillWeight = 10F;
-            colAverage2.HeaderText = "Average2";
+            colAverage2.HeaderText = "항온조2 평균값";
             colAverage2.MinimumWidth = 90;
             colAverage2.Name = "colAverage2";
             colAverage2.ReadOnly = true;
             // 
-            // colErr1
-            // 
-            colErr1.FillWeight = 9F;
-            colErr1.HeaderText = "Err1";
-            colErr1.MinimumWidth = 80;
-            colErr1.Name = "colErr1";
-            colErr1.ReadOnly = true;
-            // 
-            // colErr2
-            // 
-            colErr2.FillWeight = 9F;
-            colErr2.HeaderText = "Err2";
-            colErr2.MinimumWidth = 80;
-            colErr2.Name = "colErr2";
-            colErr2.ReadOnly = true;
-            // 
             // colOffset1
             // 
             colOffset1.FillWeight = 9F;
-            colOffset1.HeaderText = "Offset1";
+            colOffset1.HeaderText = "항온조1 오프셋";
             colOffset1.MinimumWidth = 80;
             colOffset1.Name = "colOffset1";
             colOffset1.ReadOnly = true;
@@ -756,7 +738,7 @@ namespace ThermoBathCalibrator
             // colOffset2
             // 
             colOffset2.FillWeight = 9F;
-            colOffset2.HeaderText = "Offset2";
+            colOffset2.HeaderText = "항온조2 오프셋";
             colOffset2.MinimumWidth = 80;
             colOffset2.Name = "colOffset2";
             colOffset2.ReadOnly = true;
@@ -818,8 +800,6 @@ namespace ThermoBathCalibrator
             pnlCh2GraphOverlay.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)dataGridView1).EndInit();
             tlpCommStatus.ResumeLayout(false);
-            pnlCh1GraphOverlay.BringToFront();
-            pnlCh2GraphOverlay.BringToFront();
             ResumeLayout(false);
         }
 
@@ -876,24 +856,18 @@ namespace ThermoBathCalibrator
 
         private DataGridView dataGridView1;
 
+        private TableLayoutPanel tlpCommStatus;
+        private Label lblThermoPortStatus;
         private DataGridViewTextBoxColumn colTimestamp;
         private DataGridViewTextBoxColumn colUtCh1;
         private DataGridViewTextBoxColumn colUtCh2;
-
         private DataGridViewTextBoxColumn colMax1;
         private DataGridViewTextBoxColumn colMax2;
         private DataGridViewTextBoxColumn colMin1;
         private DataGridViewTextBoxColumn colMin2;
         private DataGridViewTextBoxColumn colAverage1;
         private DataGridViewTextBoxColumn colAverage2;
-
-        private DataGridViewTextBoxColumn colErr1;
-        private DataGridViewTextBoxColumn colErr2;
-
         private DataGridViewTextBoxColumn colOffset1;
         private DataGridViewTextBoxColumn colOffset2;
-
-        private TableLayoutPanel tlpCommStatus;
-        private Label lblThermoPortStatus;
     }
 }
