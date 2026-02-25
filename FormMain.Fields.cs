@@ -99,13 +99,16 @@ namespace ThermoBathCalibrator
         private const double FixedOffsetMinY = -1.0;
         private const double FixedOffsetMaxY = 1.0;
 
-        // 일별 통계(rolling)
-        private DateTime _dailyStatsDay = DateTime.MinValue;
-        private double _dailyMax = double.NaN;
-        private double _dailyMin = double.NaN;
-        private double _dailySum;
-        private int _dailyCount;
+        // 일별 통계(CSV 기반, Ch1/Ch2 독립)
+        private DateTime _todayStatsDay = DateTime.MinValue;
+        private long _todayStatsCsvLength;
+        private bool _todayStatsInitialized;
+        private DailyChannelStats _todayStatsCh1;
+        private DailyChannelStats _todayStatsCh2;
 
+        // Grid 1분 표시 제어
+        private DateTime _lastGridDisplayedMinute = DateTime.MinValue;
+        
         // Modbus 레지스터
         private const ushort RegReadStart = 0;
         private const ushort RegReadCount = 14;
@@ -141,6 +144,7 @@ namespace ThermoBathCalibrator
         // 온도 이탈 경보(전체 화면 점멸)
         private const double TempAlarmThresholdC = 0.1;
         private bool _isTempAlarmActive;
+        private string _tempAlarmStatusText = string.Empty;
         private bool _isAlarmFlashOn;
         private System.Windows.Forms.Timer? _alarmFlashTimer;
         private readonly System.Collections.Generic.Dictionary<System.Windows.Forms.Control, System.Drawing.Color> _normalBackColors = new System.Collections.Generic.Dictionary<System.Windows.Forms.Control, System.Drawing.Color>();

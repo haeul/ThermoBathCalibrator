@@ -28,11 +28,6 @@ namespace ThermoBathCalibrator
             btnComSetting.Click += BtnComSetting_Click;
             lblHeader.DoubleClick += LblHeader_DoubleClick;
 
-            // NEW: offset control checkbox
-            chkEnableOffsetControl.CheckedChanged += ChkEnableOffsetControl_CheckedChanged;
-            chkEnableOffsetControl.Checked = false; // 기본 OFF (안전)
-            _enableOffsetControl = chkEnableOffsetControl.Checked;
-
             nudOffsetCh1.DecimalPlaces = 1;
             nudOffsetCh1.Increment = 0.1M;
             nudOffsetCh1.Minimum = -1.0M;
@@ -94,15 +89,6 @@ namespace ThermoBathCalibrator
             ApplyOffsetControlUiLock();
         }
 
-        // =============================
-        // NEW: checkbox event
-        // =============================
-        private void ChkEnableOffsetControl_CheckedChanged(object sender, EventArgs e)
-        {
-            _enableOffsetControl = chkEnableOffsetControl.Checked;
-            ApplyOffsetControlUiLock();
-        }
-
         private void ApplyOffsetControlUiLock()
         {
             bool on = _enableOffsetControl;
@@ -112,9 +98,6 @@ namespace ThermoBathCalibrator
             btnOffsetApplyCh2.Enabled = on;
             nudOffsetCh1.Enabled = on;
             nudOffsetCh2.Enabled = on;
-
-            // (선택) 화면에서 현재 모드 표시를 하고 싶으면 라벨 색/텍스트 변경도 가능
-            // 예: chkEnableOffsetControl.ForeColor = on ? Color.DarkGreen : Color.DarkRed;
         }
 
         private void BtnStart_Click(object sender, EventArgs e)
@@ -181,7 +164,7 @@ namespace ThermoBathCalibrator
             if (!_enableOffsetControl)
             {
                 MessageBox.Show(
-                    "Offset 보정(쓰기) 기능이 꺼져 있습니다.\r\n체크박스를 켠 뒤 다시 시도하세요.",
+                    "Offset 보정(쓰기) 기능이 꺼져 있습니다.\r\n설정에서 Offset 보정 체크 후 다시 시도하세요.",
                     "Offset Control Disabled",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information
@@ -209,7 +192,7 @@ namespace ThermoBathCalibrator
             if (!_enableOffsetControl)
             {
                 MessageBox.Show(
-                    "Offset 보정(쓰기) 기능이 꺼져 있습니다.\r\n체크박스를 켠 뒤 다시 시도하세요.",
+                    "Offset 보정(쓰기) 기능이 꺼져 있습니다.\r\n설정에서 Offset 보정 체크 후 다시 시도하세요.",
                     "Offset Control Disabled",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information
@@ -266,12 +249,30 @@ namespace ThermoBathCalibrator
         {
             try
             {
-                using (var dlg = new FormSettings(_host, _port, _unitId, _bath1Setpoint, _bath2Setpoint, TryWriteChannelSvCoarseFromSettings))
+                bool before = _enableOffsetControl;
+
+                using (var dlg = new FormSettings(
+                    _host, _port, _unitId,
+                    _bath1Setpoint, _bath2Setpoint,
+                    TryWriteChannelSvCoarseFromSettings,
+                    _enableOffsetControl
+                ))
                 {
                     if (dlg.ShowDialog(this) != DialogResult.OK)
                         return;
 
                     ApplyMultiBoardEndpoint(dlg.AppliedHost, dlg.AppliedPort, dlg.AppliedUnitId);
+
+                    _enableOffsetControl = dlg.AppliedEnableOffsetControl;
+                    ApplyOffsetControlUiLock();
+
+                    // 실행 중에 ON -> OFF로 바뀌면 자동 보정 상태를 초기화해두는 게 안전
+                    if (_running && before && !_enableOffsetControl)
+                    {
+                        try { _autoCtrl?.Reset(); } catch { }
+                    }
+
+                    UpdateStatusLabels();
                 }
 
                 MessageBox.Show(
@@ -378,32 +379,55 @@ namespace ThermoBathCalibrator
 
         private void UpdateAlarmState(double ch1, double ch2)
         {
-            bool ch1Alarm = !double.IsNaN(ch1) && Math.Abs(ch1 - _bath1Setpoint) >= TempAlarmThresholdC;
-            bool ch2Alarm = !double.IsNaN(ch2) && Math.Abs(ch2 - _bath2Setpoint) >= TempAlarmThresholdC;
-            bool active = ch1Alarm || ch2Alarm;
+            double ch1Low = _bath1Setpoint - TempAlarmThresholdC;
+            double ch1High = _bath1Setpoint + TempAlarmThresholdC;
+            double ch2Low = _bath2Setpoint - TempAlarmThresholdC;
+            double ch2High = _bath2Setpoint + TempAlarmThresholdC;
 
-            if (active == _isTempAlarmActive)
-                return;
+            bool ch1Under = !double.IsNaN(ch1) && ch1 < ch1Low;
+            bool ch1Over = !double.IsNaN(ch1) && ch1 > ch1High;
+            bool ch2Under = !double.IsNaN(ch2) && ch2 < ch2Low;
+            bool ch2Over = !double.IsNaN(ch2) && ch2 > ch2High;
 
-            _isTempAlarmActive = active;
+            _tempAlarmStatusText = BuildAlarmStatusText(ch1Over, ch1Under, ch2Over, ch2Under);
 
-            if (_isTempAlarmActive)
+            bool active = !string.IsNullOrWhiteSpace(_tempAlarmStatusText);
+            if (active != _isTempAlarmActive)
             {
-                _isAlarmFlashOn = false;
-                _alarmFlashTimer?.Start();
-                ToggleAlarmFlash();
+                _isTempAlarmActive = active;
+
+                if (_isTempAlarmActive)
+                {
+                    _isAlarmFlashOn = false;
+                    _alarmFlashTimer?.Start();
+                    ToggleAlarmFlash();
+                }
+                else
+                {
+                    _alarmFlashTimer?.Stop();
+                    RestoreNormalBackColors();
+                }
             }
-            else
-            {
-                _alarmFlashTimer?.Stop();
-                RestoreNormalBackColors();
-            }
+        }
+
+        private static string BuildAlarmStatusText(bool ch1Over, bool ch1Under, bool ch2Over, bool ch2Under)
+        {
+            string ch1 = ch1Over ? "항온조1 온도 초과" : (ch1Under ? "항온조1 온도 미달" : string.Empty);
+            string ch2 = ch2Over ? "항온조2 온도 초과" : (ch2Under ? "항온조2 온도 미달" : string.Empty);
+
+            if (!string.IsNullOrWhiteSpace(ch1) && !string.IsNullOrWhiteSpace(ch2))
+                return ch1 + " / " + ch2;
+
+            if (!string.IsNullOrWhiteSpace(ch1))
+                return ch1;
+
+            return ch2;
         }
 
         private void ToggleAlarmFlash()
         {
             _isAlarmFlashOn = !_isAlarmFlashOn;
-            ApplyAlarmBackColor(_isAlarmFlashOn ? Color.Red : Color.White);
+            ApplyAlarmBackColor(_isAlarmFlashOn ? Color.OrangeRed : Color.White);
         }
 
         private void CacheNormalBackColors(Control root)
@@ -419,7 +443,7 @@ namespace ThermoBathCalibrator
 
         private void ApplyAlarmBackColor(Color color)
         {
-            SetBackColorRecursive(this, color);
+            SetBackColorRecursive(this, color, skip: lblThermoPortStatus);
             Invalidate(true);
         }
 
@@ -432,12 +456,14 @@ namespace ThermoBathCalibrator
             Invalidate(true);
         }
 
-        private static void SetBackColorRecursive(Control root, Color color)
+        private static void SetBackColorRecursive(Control root, Color color, Control skip)
         {
-            root.BackColor = color;
+            if (!ReferenceEquals(root, skip))
+                root.BackColor = color;
+
             foreach (Control child in root.Controls)
             {
-                SetBackColorRecursive(child, color);
+                SetBackColorRecursive(child, color, skip);
             }
         }
 
@@ -492,22 +518,24 @@ namespace ThermoBathCalibrator
                 return;
             }
 
+            if (_isTempAlarmActive && !string.IsNullOrWhiteSpace(_tempAlarmStatusText))
+            {
+                lblThermoPortStatus.Text = _tempAlarmStatusText;
+                lblThermoPortStatus.ForeColor = Color.OrangeRed;
+                return;
+            }
+
             lblThermoPortStatus.Text =
                 $"BOARD({_host}:{_port}): {(_boardConnected ? "CONNECTED" : "DISCONNECTED")} (fail={_boardFailCount})";
 
             lblThermoPortStatus.ForeColor = _boardConnected ? Color.LimeGreen : Color.OrangeRed;
         }
+
         // ===========================================================
-        // IMPORTANT: LoopOnceCore() 내부에서 "자동 write" 분기 필요
+        // IMPORTANT
         // ===========================================================
-        //
-        // 네가 이미 가진 LoopOnceCore() 코드에서,
-        // 아래와 같은 형태로 "enableControl=false면 UpdateAndMaybeWrite 호출 자체를 스킵"해야 함.
-        //
-        //  bool enableControl = _enableOffsetControl;
-        //  if (enableControl) { next1 = _autoCtrl.UpdateAndMaybeWrite(... tryWriteOffset: TryWriteChannelOffset ...); }
-        //  else { next1 = currentOffset1; TraceModbus("OFFSET CONTROL DISABLED -> monitoring only (no FC10 write)"); }
-        //
-        // 이 분기만 들어가면 "Start 모니터링 모드"에서 절대 FC10 write가 나가지 않는다.
+        // 자동 보정이 실행 중에 OFF로 바뀌었을 때도 즉시 멈추려면,
+        // LoopOnceCore() 또는 WorkerLoop 내부에서 매 tick마다 _enableOffsetControl을 읽어서
+        // UpdateAndMaybeWrite 호출을 스킵해야 한다.
     }
 }

@@ -20,30 +20,27 @@ namespace ThermoBathCalibrator
                     // CSV는 항상 남김 (통신 실패도 기록해야 나중에 원인분석 가능)
                     AppendCsvRow(row);
 
-                    if (ShouldSkipRow(row))
+                    bool skipRow = ShouldSkipRow(row);
+
+                    BeginInvoke(new Action(() =>
                     {
-                        BeginInvoke(new Action(() =>
+                        if (!skipRow)
                         {
-                            UpdateOffsetUiFromState();
-                            UpdateAlarmState(double.NaN, double.NaN);
-                            UpdateStatusLabels();
-                        }));
-                    }
-                    else
-                    {
-                        BeginInvoke(new Action(() =>
-                        {
-                            AppendRowToGrid(row);
+                            AppendRowToGridByMinute(row);
                             AppendRowToHistory(row);
                             UpdateTopNumbers(row.UtCh1, row.UtCh2);
-                            UpdateAlarmState(row.UtCh1, row.UtCh2);
-                            UpdateOffsetUiFromState();
-                            UpdateStatusLabels();
+                        }
+
+                        UpdateAlarmState(row.UtCh1, row.UtCh2);
+                        UpdateOffsetUiFromState();
+                        UpdateStatusLabels();
+
+                        if (!skipRow)
+                        {
                             pnlCh1Graph.Invalidate();
                             pnlCh2Graph.Invalidate();
-                        }));
-                    }
-
+                        }
+                    }));
                 }
                 catch (Exception ex)
                 {
@@ -92,9 +89,11 @@ namespace ThermoBathCalibrator
             double bath1Pv = readOk ? snap.Ch1Pv : double.NaN;
             double bath2Pv = readOk ? snap.Ch2Pv : double.NaN;
 
-            var ch1Stats = CalcChannelStats(_history.Select(h => h.UtCh1), utCh1);
-            var ch2Stats = CalcChannelStats(_history.Select(h => h.UtCh2), utCh2); double rowAvg = AverageOrNaN(utCh1, utCh2);
-            UpdateDailyStats(now, rowAvg);
+            EnsureTodayStatsReady(now);
+            UpdateTodayStatsIfNeeded(now);
+
+            (double max, double min, double avg) ch1Stats = GetTodayStatsSummaryWithCurrent(_todayStatsCh1, utCh1);
+            (double max, double min, double avg) ch2Stats = GetTodayStatsSummaryWithCurrent(_todayStatsCh2, utCh2);
 
             if (readOk)
             {
@@ -285,9 +284,9 @@ namespace ThermoBathCalibrator
                 Bath1SetTemp = bath1SetTemp,
                 Bath2SetTemp = bath2SetTemp,
 
-                DailyMax = _dailyMax,
-                DailyMin = _dailyMin,
-                DailyAverage = (_dailyCount > 0) ? (_dailySum / _dailyCount) : double.NaN
+                DailyMax = MaxOrNaN(ch1Stats.max, ch2Stats.max),
+                DailyMin = MinOrNaN(ch1Stats.min, ch2Stats.min),
+                DailyAverage = AverageOrNaN(ch1Stats.avg, ch2Stats.avg)
             };
         }
 
@@ -305,55 +304,130 @@ namespace ThermoBathCalibrator
                 _history.RemoveAt(0);
         }
 
-        private void UpdateDailyStats(DateTime now, double value)
+        private void AppendRowToGridByMinute(SampleRow r)
+        {
+            DateTime minute = new DateTime(r.Timestamp.Year, r.Timestamp.Month, r.Timestamp.Day, r.Timestamp.Hour, r.Timestamp.Minute, 0);
+            if (_lastGridDisplayedMinute == minute)
+                return;
+
+            _lastGridDisplayedMinute = minute;
+            AppendRowToGrid(r);
+        }
+
+        private void EnsureTodayStatsReady(DateTime now)
         {
             DateTime day = now.Date;
-            if (_dailyStatsDay != day)
-            {
-                _dailyStatsDay = day;
-                _dailyMax = double.NaN;
-                _dailyMin = double.NaN;
-                _dailySum = 0.0;
-                _dailyCount = 0;
-            }
+            if (_todayStatsInitialized && _todayStatsDay == day)
+                return;
 
-            if (double.IsNaN(value) || double.IsInfinity(value)) return;
+            _todayStatsDay = day;
+            _todayStatsCsvLength = 0;
+            _todayStatsInitialized = true;
+            _todayStatsCh1.Reset();
+            _todayStatsCh2.Reset();
 
-            if (_dailyCount == 0)
+            try
             {
-                _dailyMax = value;
-                _dailyMin = value;
-            }
-            else
-            {
-                if (value > _dailyMax) _dailyMax = value;
-                if (value < _dailyMin) _dailyMin = value;
-            }
+                if (string.IsNullOrWhiteSpace(_csvPath) || !System.IO.File.Exists(_csvPath))
+                    return;
 
-            _dailySum += value;
-            _dailyCount++;
+                using (var fs = new System.IO.FileStream(_csvPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
+                using (var sr = new System.IO.StreamReader(fs, System.Text.Encoding.UTF8, true))
+                {
+                    string? line;
+                    bool first = true;
+                    while ((line = sr.ReadLine()) != null)
+                    {
+                        if (first)
+                        {
+                            first = false;
+                            continue;
+                        }
+
+                        TryAccumulateTodayStatsLine(line, day, ref _todayStatsCh1, ref _todayStatsCh2);
+                    }
+
+                    _todayStatsCsvLength = fs.Length;
+                }
+            }
+            catch
+            {
+            }
         }
 
-        private static (double max, double min, double avg) CalcChannelStats(IEnumerable<double> pastValues, double current)
+        private void UpdateTodayStatsIfNeeded(DateTime now)
         {
-            var values = new List<double>();
+            DateTime day = now.Date;
+            if (_todayStatsDay != day)
+                EnsureTodayStatsReady(now);
 
-            foreach (double v in pastValues)
+            try
             {
-                if (double.IsNaN(v) || double.IsInfinity(v))
-                    continue;
-                values.Add(v);
+                if (!string.IsNullOrWhiteSpace(_csvPath) && System.IO.File.Exists(_csvPath))
+                {
+                    using (var fs = new System.IO.FileStream(_csvPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
+                    {
+                        long len = fs.Length;
+                        if (len >= _todayStatsCsvLength)
+                        {
+                            fs.Seek(_todayStatsCsvLength, System.IO.SeekOrigin.Begin);
+                            using (var sr = new System.IO.StreamReader(fs, System.Text.Encoding.UTF8, true, 1024, leaveOpen: true))
+                            {
+                                string? line;
+                                while ((line = sr.ReadLine()) != null)
+                                {
+                                    if (string.IsNullOrWhiteSpace(line)) continue;
+                                    TryAccumulateTodayStatsLine(line, day, ref _todayStatsCh1, ref _todayStatsCh2);
+                                }
+                            }
+                            _todayStatsCsvLength = fs.Length;
+                        }
+                    }
+                }
+            }
+            catch
+            {
             }
 
-            if (!double.IsNaN(current) && !double.IsInfinity(current))
-                values.Add(current);
+        }
 
-            if (values.Count == 0)
+        private static void TryAccumulateTodayStatsLine(string line, DateTime day, ref DailyChannelStats ch1, ref DailyChannelStats ch2)
+        {
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith("timestamp", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            string[] cells = line.Split(',');
+            if (cells.Length < 3)
+                return;
+
+            if (!DateTime.TryParseExact(cells[0].Trim(), "yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTime ts))
+                return;
+
+            if (ts.Date != day)
+                return;
+
+            if (double.TryParse(cells[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double ut1))
+                ch1.Add(ut1);
+
+            if (double.TryParse(cells[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double ut2))
+                ch2.Add(ut2);
+        }
+
+
+        private static (double max, double min, double avg) GetTodayStatsSummaryWithCurrent(DailyChannelStats stats, double current)
+        {
+            DailyChannelStats merged = stats;
+            merged.Add(current);
+            return GetTodayStatsSummary(merged);
+        }
+
+        private static (double max, double min, double avg) GetTodayStatsSummary(DailyChannelStats stats)
+        {
+            if (stats.Count <= 0)
                 return (double.NaN, double.NaN, double.NaN);
 
-            return (values.Max(), values.Min(), values.Average());
+            return (stats.Max, stats.Min, stats.Average);
         }
-
         private static double MaxOrNaN(double a, double b)
         {
             bool aOk = !double.IsNaN(a) && !double.IsInfinity(a);

@@ -23,6 +23,43 @@ namespace ThermoBathCalibrator
             public double Tj;
         }
 
+        private struct DailyChannelStats
+        {
+            public int Count;
+            public double Sum;
+            public double Min;
+            public double Max;
+
+            public void Reset()
+            {
+                Count = 0;
+                Sum = 0.0;
+                Min = double.NaN;
+                Max = double.NaN;
+            }
+
+            public void Add(double value)
+            {
+                if (double.IsNaN(value) || double.IsInfinity(value)) return;
+
+                if (Count == 0)
+                {
+                    Min = value;
+                    Max = value;
+                }
+                else
+                {
+                    if (value < Min) Min = value;
+                    if (value > Max) Max = value;
+                }
+
+                Sum += value;
+                Count++;
+            }
+
+            public double Average => Count > 0 ? (Sum / Count) : double.NaN;
+        }
+
         private sealed class SampleRow
         {
             public DateTime Timestamp { get; set; }

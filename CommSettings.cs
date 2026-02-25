@@ -8,6 +8,7 @@ namespace ThermoBathCalibrator
     {
         // 멀티보드(Modbus TCP) 설정만 유지
         public MultiBoardTcpSettings MultiBoard { get; set; } = MultiBoardTcpSettings.CreateDefault();
+        public bool EnableOffsetControl { get; set; } = true;
 
         public static string GetDefaultPath()
         {
