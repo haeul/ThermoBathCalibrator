@@ -40,7 +40,7 @@ namespace ThermoBathCalibrator
         private void ApplyMultiBoardEndpoint(string host, int port, byte unitId)
         {
             _host = (host ?? "").Trim();
-            if (string.IsNullOrWhiteSpace(_host)) _host = "192.168.1.11";
+            if (string.IsNullOrWhiteSpace(_host)) _host = "192.168.0.41";
 
             _port = (port > 0 && port <= 65535) ? port : 13000;
             _unitId = (unitId >= 1 && unitId <= 247) ? unitId : (byte)1;

@@ -62,7 +62,11 @@ namespace ThermoBathCalibrator
             chkShowOffsetCh2.CheckedChanged += (_, __) => pnlCh2Graph.Invalidate();
 
             LoadMultiBoardSettingsFromDiskIfAny();
-            BuildMultiBoardClient();
+
+            // 저장된 설정을 읽어서 _enableOffsetControl 초기화
+            _enableOffsetControl = CommSettings.LoadOrDefault(CommSettings.GetDefaultPath()).EnableOffsetControl;
+
+            ApplyOffsetControlUiLock(); BuildMultiBoardClient();
 
             _autoCtrl = new OffsetAutoController(_autoCfg);
 
@@ -92,9 +96,9 @@ namespace ThermoBathCalibrator
                 UpdateStatusLabels();
             };
 
-            _alarmFlashTimer = new System.Windows.Forms.Timer();
-            _alarmFlashTimer.Interval = 350;
-            _alarmFlashTimer.Tick += (s, e) => ToggleAlarmFlash();
+            //_alarmFlashTimer = new System.Windows.Forms.Timer();
+            //_alarmFlashTimer.Interval = 350;
+            //_alarmFlashTimer.Tick += (s, e) => ToggleAlarmFlash();
 
             CacheNormalBackColors(this);
 
@@ -390,58 +394,58 @@ namespace ThermoBathCalibrator
             return false;
         }
 
-        private void UpdateAlarmState(double ch1, double ch2)
-        {
-            double ch1Low = _bath1Setpoint - TempAlarmThresholdC;
-            double ch1High = _bath1Setpoint + TempAlarmThresholdC;
-            double ch2Low = _bath2Setpoint - TempAlarmThresholdC;
-            double ch2High = _bath2Setpoint + TempAlarmThresholdC;
+        //private void UpdateAlarmState(double ch1, double ch2)
+        //{
+        //    double ch1Low = _bath1Setpoint - TempAlarmThresholdC;
+        //    double ch1High = _bath1Setpoint + TempAlarmThresholdC;
+        //    double ch2Low = _bath2Setpoint - TempAlarmThresholdC;
+        //    double ch2High = _bath2Setpoint + TempAlarmThresholdC;
 
-            bool ch1Under = !double.IsNaN(ch1) && ch1 < ch1Low;
-            bool ch1Over = !double.IsNaN(ch1) && ch1 > ch1High;
-            bool ch2Under = !double.IsNaN(ch2) && ch2 < ch2Low;
-            bool ch2Over = !double.IsNaN(ch2) && ch2 > ch2High;
+        //    bool ch1Under = !double.IsNaN(ch1) && ch1 < ch1Low;
+        //    bool ch1Over = !double.IsNaN(ch1) && ch1 > ch1High;
+        //    bool ch2Under = !double.IsNaN(ch2) && ch2 < ch2Low;
+        //    bool ch2Over = !double.IsNaN(ch2) && ch2 > ch2High;
 
-            _tempAlarmStatusText = BuildAlarmStatusText(ch1Over, ch1Under, ch2Over, ch2Under);
+        //    _tempAlarmStatusText = BuildAlarmStatusText(ch1Over, ch1Under, ch2Over, ch2Under);
 
-            bool active = !string.IsNullOrWhiteSpace(_tempAlarmStatusText);
-            if (active != _isTempAlarmActive)
-            {
-                _isTempAlarmActive = active;
+        //    bool active = !string.IsNullOrWhiteSpace(_tempAlarmStatusText);
+        //    if (active != _isTempAlarmActive)
+        //    {
+        //        _isTempAlarmActive = active;
 
-                if (_isTempAlarmActive)
-                {
-                    _isAlarmFlashOn = false;
-                    _alarmFlashTimer?.Start();
-                    ToggleAlarmFlash();
-                }
-                else
-                {
-                    _alarmFlashTimer?.Stop();
-                    RestoreNormalBackColors();
-                }
-            }
-        }
+        //        if (_isTempAlarmActive)
+        //        {
+        //            _isAlarmFlashOn = false;
+        //            _alarmFlashTimer?.Start();
+        //            ToggleAlarmFlash();
+        //        }
+        //        else
+        //        {
+        //            _alarmFlashTimer?.Stop();
+        //            RestoreNormalBackColors();
+        //        }
+        //    }
+        //}
 
-        private static string BuildAlarmStatusText(bool ch1Over, bool ch1Under, bool ch2Over, bool ch2Under)
-        {
-            string ch1 = ch1Over ? "항온조1 온도 초과" : (ch1Under ? "항온조1 온도 미달" : string.Empty);
-            string ch2 = ch2Over ? "항온조2 온도 초과" : (ch2Under ? "항온조2 온도 미달" : string.Empty);
+        //private static string BuildAlarmStatusText(bool ch1Over, bool ch1Under, bool ch2Over, bool ch2Under)
+        //{
+        //    string ch1 = ch1Over ? "항온조1 온도 초과" : (ch1Under ? "항온조1 온도 미달" : string.Empty);
+        //    string ch2 = ch2Over ? "항온조2 온도 초과" : (ch2Under ? "항온조2 온도 미달" : string.Empty);
 
-            if (!string.IsNullOrWhiteSpace(ch1) && !string.IsNullOrWhiteSpace(ch2))
-                return ch1 + " / " + ch2;
+        //    if (!string.IsNullOrWhiteSpace(ch1) && !string.IsNullOrWhiteSpace(ch2))
+        //        return ch1 + " / " + ch2;
 
-            if (!string.IsNullOrWhiteSpace(ch1))
-                return ch1;
+        //    if (!string.IsNullOrWhiteSpace(ch1))
+        //        return ch1;
 
-            return ch2;
-        }
+        //    return ch2;
+        //}
 
-        private void ToggleAlarmFlash()
-        {
-            _isAlarmFlashOn = !_isAlarmFlashOn;
-            ApplyAlarmBackColor(_isAlarmFlashOn ? Color.OrangeRed : Color.White);
-        }
+        //private void ToggleAlarmFlash()
+        //{
+        //    _isAlarmFlashOn = !_isAlarmFlashOn;
+        //    ApplyAlarmBackColor(_isAlarmFlashOn ? Color.OrangeRed : Color.White);
+        //}
 
         private void CacheNormalBackColors(Control root)
         {

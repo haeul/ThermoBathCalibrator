@@ -42,7 +42,7 @@ namespace ThermoBathCalibrator
 
         private MultiBoardModbusClient _mb = null!;
 
-        private string _host = "192.168.1.11";
+        private string _host = "192.168.0.41";
         private int _port = 13000;
         private byte _unitId = 1;
 

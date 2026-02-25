@@ -491,21 +491,21 @@ namespace ThermoBathCalibrator
             pnlCh1GraphOverlay.Controls.Add(lblCh1GraphOffsetState);
             pnlCh1GraphOverlay.Controls.Add(chkShowOffsetCh1);
             pnlCh1GraphOverlay.Controls.Add(lblCh1GraphOffset);
-            pnlCh1GraphOverlay.Location = new Point(330, 0);
+            pnlCh1GraphOverlay.Location = new Point(381, 10);
             pnlCh1GraphOverlay.Name = "pnlCh1GraphOverlay";
-            pnlCh1GraphOverlay.Size = new Size(170, 30);
+            pnlCh1GraphOverlay.Size = new Size(125, 30);
             pnlCh1GraphOverlay.TabIndex = 1;
             // 
             // lblCh1GraphOffsetState
             // 
             lblCh1GraphOffsetState.Dock = DockStyle.Fill;
             lblCh1GraphOffsetState.Font = new Font("Segoe UI Semibold", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh1GraphOffsetState.Location = new Point(83, 0);
+            lblCh1GraphOffsetState.Location = new Point(75, 0);
             lblCh1GraphOffsetState.Margin = new Padding(0);
             lblCh1GraphOffsetState.Name = "lblCh1GraphOffsetState";
-            lblCh1GraphOffsetState.Size = new Size(85, 28);
+            lblCh1GraphOffsetState.Size = new Size(55, 28);
             lblCh1GraphOffsetState.TabIndex = 0;
-            lblCh1GraphOffsetState.Text = "ON";
+            lblCh1GraphOffsetState.Text = "오프셋 그래프";
             lblCh1GraphOffsetState.TextAlign = ContentAlignment.MiddleLeft;
             // 
             // chkShowOffsetCh1
@@ -516,7 +516,7 @@ namespace ThermoBathCalibrator
             chkShowOffsetCh1.Location = new Point(55, 0);
             chkShowOffsetCh1.Margin = new Padding(0);
             chkShowOffsetCh1.Name = "chkShowOffsetCh1";
-            chkShowOffsetCh1.Size = new Size(28, 28);
+            chkShowOffsetCh1.Size = new Size(20, 28);
             chkShowOffsetCh1.TabIndex = 1;
             // 
             // lblCh1GraphOffset
@@ -526,9 +526,9 @@ namespace ThermoBathCalibrator
             lblCh1GraphOffset.Location = new Point(0, 0);
             lblCh1GraphOffset.Margin = new Padding(0);
             lblCh1GraphOffset.Name = "lblCh1GraphOffset";
-            lblCh1GraphOffset.Size = new Size(55, 28);
+            lblCh1GraphOffset.Size = new Size(5, 28);
             lblCh1GraphOffset.TabIndex = 2;
-            lblCh1GraphOffset.Text = "Offset";
+            lblCh1GraphOffset.Text = "";
             lblCh1GraphOffset.TextAlign = ContentAlignment.MiddleLeft;
             // 
             // pnlCh2GraphWrap
@@ -561,9 +561,9 @@ namespace ThermoBathCalibrator
             pnlCh2GraphOverlay.Controls.Add(lblCh2GraphOffsetState);
             pnlCh2GraphOverlay.Controls.Add(chkShowOffsetCh2);
             pnlCh2GraphOverlay.Controls.Add(lblCh2GraphOffset);
-            pnlCh2GraphOverlay.Location = new Point(330, 0);
+            pnlCh2GraphOverlay.Location = new Point(381, 10);
             pnlCh2GraphOverlay.Name = "pnlCh2GraphOverlay";
-            pnlCh2GraphOverlay.Size = new Size(170, 30);
+            pnlCh2GraphOverlay.Size = new Size(125, 30);
             pnlCh2GraphOverlay.TabIndex = 1;
             // 
             // lblCh2GraphOffsetState
@@ -573,9 +573,9 @@ namespace ThermoBathCalibrator
             lblCh2GraphOffsetState.Location = new Point(83, 0);
             lblCh2GraphOffsetState.Margin = new Padding(0);
             lblCh2GraphOffsetState.Name = "lblCh2GraphOffsetState";
-            lblCh2GraphOffsetState.Size = new Size(85, 28);
+            lblCh2GraphOffsetState.Size = new Size(55, 28);
             lblCh2GraphOffsetState.TabIndex = 0;
-            lblCh2GraphOffsetState.Text = "ON";
+            lblCh2GraphOffsetState.Text = "오프셋 그래프";
             lblCh2GraphOffsetState.TextAlign = ContentAlignment.MiddleLeft;
             // 
             // chkShowOffsetCh2
@@ -586,7 +586,7 @@ namespace ThermoBathCalibrator
             chkShowOffsetCh2.Location = new Point(55, 0);
             chkShowOffsetCh2.Margin = new Padding(0);
             chkShowOffsetCh2.Name = "chkShowOffsetCh2";
-            chkShowOffsetCh2.Size = new Size(28, 28);
+            chkShowOffsetCh2.Size = new Size(20, 28);
             chkShowOffsetCh2.TabIndex = 1;
             // 
             // lblCh2GraphOffset
@@ -596,9 +596,9 @@ namespace ThermoBathCalibrator
             lblCh2GraphOffset.Location = new Point(0, 0);
             lblCh2GraphOffset.Margin = new Padding(0);
             lblCh2GraphOffset.Name = "lblCh2GraphOffset";
-            lblCh2GraphOffset.Size = new Size(55, 28);
+            lblCh2GraphOffset.Size = new Size(5, 28);
             lblCh2GraphOffset.TabIndex = 2;
-            lblCh2GraphOffset.Text = "Offset";
+            lblCh2GraphOffset.Text = "";
             lblCh2GraphOffset.TextAlign = ContentAlignment.MiddleLeft;
             // 
             // dataGridView1
@@ -638,7 +638,7 @@ namespace ThermoBathCalibrator
             // 
             // colTimestamp
             // 
-            dataGridViewCellStyle2.Alignment = DataGridViewContentAlignment.MiddleLeft;
+            dataGridViewCellStyle2.Alignment = DataGridViewContentAlignment.MiddleCenter;
             colTimestamp.DefaultCellStyle = dataGridViewCellStyle2;
             colTimestamp.FillWeight = 18F;
             colTimestamp.HeaderText = "시간";

@@ -31,7 +31,7 @@ namespace ThermoBathCalibrator
                             UpdateTopNumbers(row.UtCh1, row.UtCh2);
                         }
 
-                        UpdateAlarmState(row.UtCh1, row.UtCh2);
+                        //UpdateAlarmState(row.UtCh1, row.UtCh2);
                         UpdateOffsetUiFromState();
                         UpdateStatusLabels();
 

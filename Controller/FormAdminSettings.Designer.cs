@@ -91,7 +91,7 @@ namespace ThermoBathCalibrator
             lblSetpointCh1.Name = "lblSetpointCh1";
             lblSetpointCh1.Size = new Size(168, 44);
             lblSetpointCh1.TabIndex = 2;
-            lblSetpointCh1.Text = "SV CH1 (°C)";
+            lblSetpointCh1.Text = "항온조1 (°C)";
             lblSetpointCh1.TextAlign = ContentAlignment.MiddleLeft;
             // 
             // lblSetpointCh2
@@ -101,7 +101,7 @@ namespace ThermoBathCalibrator
             lblSetpointCh2.Name = "lblSetpointCh2";
             lblSetpointCh2.Size = new Size(168, 44);
             lblSetpointCh2.TabIndex = 3;
-            lblSetpointCh2.Text = "SV CH2 (°C)";
+            lblSetpointCh2.Text = "항온조2 (°C)";
             lblSetpointCh2.TextAlign = ContentAlignment.MiddleLeft;
             // 
             // nudUtBiasCh1

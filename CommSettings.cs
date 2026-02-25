@@ -63,7 +63,7 @@ namespace ThermoBathCalibrator
     // 멀티보드(Modbus TCP) 설정 클래스
     public sealed class MultiBoardTcpSettings
     {
-        public string Host { get; set; } = "192.168.1.11";
+        public string Host { get; set; } = "192.168.0.41";
         public int Port { get; set; } = 13000;
         public int UnitId { get; set; } = 1;
 

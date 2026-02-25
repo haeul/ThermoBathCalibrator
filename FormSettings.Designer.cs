@@ -54,7 +54,7 @@ namespace ThermoBathCalibrator
             grpMultiBoard.Size = new Size(420, 126);
             grpMultiBoard.TabIndex = 0;
             grpMultiBoard.TabStop = false;
-            grpMultiBoard.Text = "MULTI BOARD";
+            grpMultiBoard.Text = "멀티보드";
             // 
             // lblMbHost
             // 
@@ -120,7 +120,7 @@ namespace ThermoBathCalibrator
             grpDeviceSv.Size = new Size(420, 118);
             grpDeviceSv.TabIndex = 1;
             grpDeviceSv.TabStop = false;
-            grpDeviceSv.Text = "DEVICE SV (0.1°C)";
+            grpDeviceSv.Text = "항온조 설정 온도 (0.1°C)";
             // 
             // lblCh1Sv
             // 
@@ -128,7 +128,7 @@ namespace ThermoBathCalibrator
             lblCh1Sv.Name = "lblCh1Sv";
             lblCh1Sv.Size = new Size(90, 20);
             lblCh1Sv.TabIndex = 0;
-            lblCh1Sv.Text = "CH1 SV";
+            lblCh1Sv.Text = "항온조1";
             // 
             // lblCh2Sv
             // 
@@ -136,7 +136,7 @@ namespace ThermoBathCalibrator
             lblCh2Sv.Name = "lblCh2Sv";
             lblCh2Sv.Size = new Size(90, 20);
             lblCh2Sv.TabIndex = 1;
-            lblCh2Sv.Text = "CH2 SV";
+            lblCh2Sv.Text = "항온조2";
             // 
             // nudCh1Sv
             // 
@@ -166,7 +166,7 @@ namespace ThermoBathCalibrator
             btnWriteCh1Sv.Name = "btnWriteCh1Sv";
             btnWriteCh1Sv.Size = new Size(100, 27);
             btnWriteCh1Sv.TabIndex = 4;
-            btnWriteCh1Sv.Text = "CH1 적용";
+            btnWriteCh1Sv.Text = "항온조1 적용";
             // 
             // btnWriteCh2Sv
             // 
@@ -174,7 +174,7 @@ namespace ThermoBathCalibrator
             btnWriteCh2Sv.Name = "btnWriteCh2Sv";
             btnWriteCh2Sv.Size = new Size(100, 27);
             btnWriteCh2Sv.TabIndex = 5;
-            btnWriteCh2Sv.Text = "CH2 적용";
+            btnWriteCh2Sv.Text = "항온조2 적용";
             // 
             // btnSave
             // 
@@ -196,11 +196,11 @@ namespace ThermoBathCalibrator
             // 
             chkEnableOffsetControl.AutoSize = true;
             chkEnableOffsetControl.Font = new Font("Segoe UI", 11.25F, FontStyle.Regular, GraphicsUnit.Point, 0);
-            chkEnableOffsetControl.Location = new Point(325, 274);
+            chkEnableOffsetControl.Location = new Point(274, 274);
             chkEnableOffsetControl.Name = "chkEnableOffsetControl";
-            chkEnableOffsetControl.Size = new Size(107, 24);
+            chkEnableOffsetControl.Size = new Size(156, 24);
             chkEnableOffsetControl.TabIndex = 6;
-            chkEnableOffsetControl.Text = "오프셋 보정";
+            chkEnableOffsetControl.Text = "오프셋 보정 활성화";
             chkEnableOffsetControl.UseVisualStyleBackColor = true;
             // 
             // FormSettings
