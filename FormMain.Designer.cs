@@ -284,12 +284,12 @@ namespace ThermoBathCalibrator
             nudOffsetCh1.Dock = DockStyle.Fill;
             nudOffsetCh1.Font = new Font("Segoe UI Semibold", 16F, FontStyle.Bold, GraphicsUnit.Point, 0);
             nudOffsetCh1.Increment = new decimal(new int[] { 1, 0, 0, 65536 });
-            nudOffsetCh1.Location = new Point(255, 63);
+            nudOffsetCh1.Location = new Point(256, 64);
             nudOffsetCh1.Margin = new Padding(9);
             nudOffsetCh1.Maximum = new decimal(new int[] { 9, 0, 0, 0 });
             nudOffsetCh1.Minimum = new decimal(new int[] { 9, 0, 0, int.MinValue });
             nudOffsetCh1.Name = "nudOffsetCh1";
-            nudOffsetCh1.Size = new Size(97, 36);
+            nudOffsetCh1.Size = new Size(95, 36);
             nudOffsetCh1.TabIndex = 4;
             // 
             // btnOffsetApplyCh1
@@ -386,12 +386,12 @@ namespace ThermoBathCalibrator
             nudOffsetCh2.Dock = DockStyle.Fill;
             nudOffsetCh2.Font = new Font("Segoe UI Semibold", 16F, FontStyle.Bold, GraphicsUnit.Point, 0);
             nudOffsetCh2.Increment = new decimal(new int[] { 1, 0, 0, 65536 });
-            nudOffsetCh2.Location = new Point(249, 61);
+            nudOffsetCh2.Location = new Point(252, 64);
             nudOffsetCh2.Margin = new Padding(9);
             nudOffsetCh2.Maximum = new decimal(new int[] { 9, 0, 0, 0 });
             nudOffsetCh2.Minimum = new decimal(new int[] { 9, 0, 0, int.MinValue });
             nudOffsetCh2.Name = "nudOffsetCh2";
-            nudOffsetCh2.Size = new Size(98, 36);
+            nudOffsetCh2.Size = new Size(92, 36);
             nudOffsetCh2.TabIndex = 4;
             // 
             // btnOffsetApplyCh2

@@ -19,6 +19,19 @@ namespace ThermoBathCalibrator
 
             Text = "ThermoBathCalibrator";
 
+            // overlay가 그래프 위로 올라오게
+            pnlCh1GraphOverlay.BringToFront();
+            pnlCh2GraphOverlay.BringToFront();
+
+            // Dock 순서 강제: Left(Offset 라벨) -> Left(체크박스) -> Fill(ON/OFF 라벨)
+            pnlCh1GraphOverlay.Controls.SetChildIndex(lblCh1GraphOffset, 2);
+            pnlCh1GraphOverlay.Controls.SetChildIndex(chkShowOffsetCh1, 1);
+            pnlCh1GraphOverlay.Controls.SetChildIndex(lblCh1GraphOffsetState, 0);
+
+            pnlCh2GraphOverlay.Controls.SetChildIndex(lblCh2GraphOffset, 2);
+            pnlCh2GraphOverlay.Controls.SetChildIndex(chkShowOffsetCh2, 1);
+            pnlCh2GraphOverlay.Controls.SetChildIndex(lblCh2GraphOffsetState, 0);
+
             btnStart.Click += BtnStart_Click;
             btnStop.Click += BtnStop_Click;
 

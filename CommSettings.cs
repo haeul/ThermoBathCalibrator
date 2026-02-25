@@ -75,7 +75,7 @@ namespace ThermoBathCalibrator
         {
             return new MultiBoardTcpSettings
             {
-                Host = "192.168.1.11",
+                Host = "192.168.0.41",
                 Port = 13000,
                 UnitId = 1,
                 ConnectTimeoutMs = 1000,

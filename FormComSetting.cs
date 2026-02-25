@@ -317,7 +317,7 @@ namespace ThermoBathCalibrator
         {
             var s = new CommSettings();
 
-            s.MultiBoard.Host = SafeText(txtMbHost.Text, "192.168.1.11");
+            s.MultiBoard.Host = SafeText(txtMbHost.Text, "192.168.0.41");
             s.MultiBoard.Port = (int)numMbPort.Value;
             s.MultiBoard.UnitId = (int)numMbUnitId.Value;
 

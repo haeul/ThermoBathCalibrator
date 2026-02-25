@@ -101,7 +101,7 @@ namespace ThermoBathCalibrator
 
             txtMbHost.Location = new Point(110, 28);
             txtMbHost.Size = new Size(290, 23);
-            txtMbHost.Text = "192.168.1.11";
+            txtMbHost.Text = "192.168.0.41";
 
             lblMbPort.Location = new Point(16, 60);
             lblMbPort.Size = new Size(90, 20);
