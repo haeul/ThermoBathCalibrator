@@ -495,7 +495,6 @@ namespace ThermoBathCalibrator
             // pnlCh1Graph
             // 
             pnlCh1Graph.BackColor = Color.White;
-            pnlCh1Graph.BorderStyle = BorderStyle.FixedSingle;
             pnlCh1Graph.Dock = DockStyle.Fill;
             pnlCh1Graph.Location = new Point(0, 0);
             pnlCh1Graph.Margin = new Padding(0);
@@ -511,7 +510,7 @@ namespace ThermoBathCalibrator
             pnlCh1GraphOverlay.Controls.Add(lblCh1GraphOffsetState);
             pnlCh1GraphOverlay.Controls.Add(chkShowOffsetCh1);
             pnlCh1GraphOverlay.Controls.Add(lblCh1GraphOffset);
-            pnlCh1GraphOverlay.Location = new Point(370, 0);
+            pnlCh1GraphOverlay.Location = new Point(330, 0);
             pnlCh1GraphOverlay.Name = "pnlCh1GraphOverlay";
             pnlCh1GraphOverlay.Size = new Size(170, 30);
             pnlCh1GraphOverlay.TabIndex = 1;
@@ -566,7 +565,6 @@ namespace ThermoBathCalibrator
             // pnlCh2Graph
             // 
             pnlCh2Graph.BackColor = Color.White;
-            pnlCh2Graph.BorderStyle = BorderStyle.FixedSingle;
             pnlCh2Graph.Dock = DockStyle.Fill;
             pnlCh2Graph.Location = new Point(0, 0);
             pnlCh2Graph.Margin = new Padding(0);
@@ -582,7 +580,7 @@ namespace ThermoBathCalibrator
             pnlCh2GraphOverlay.Controls.Add(lblCh2GraphOffsetState);
             pnlCh2GraphOverlay.Controls.Add(chkShowOffsetCh2);
             pnlCh2GraphOverlay.Controls.Add(lblCh2GraphOffset);
-            pnlCh2GraphOverlay.Location = new Point(370, 0);
+            pnlCh2GraphOverlay.Location = new Point(330, 0);
             pnlCh2GraphOverlay.Name = "pnlCh2GraphOverlay";
             pnlCh2GraphOverlay.Size = new Size(170, 30);
             pnlCh2GraphOverlay.TabIndex = 1;
@@ -820,6 +818,8 @@ namespace ThermoBathCalibrator
             pnlCh2GraphOverlay.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)dataGridView1).EndInit();
             tlpCommStatus.ResumeLayout(false);
+            pnlCh1GraphOverlay.BringToFront();
+            pnlCh2GraphOverlay.BringToFront();
             ResumeLayout(false);
         }
 
