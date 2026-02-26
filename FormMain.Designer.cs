@@ -59,11 +59,11 @@ namespace ThermoBathCalibrator
             chkShowOffsetCh2 = new CheckBox();
             lblCh2GraphOffset = new Label();
             dataGridView1 = new DataGridView();
+            tlpCommStatus = new TableLayoutPanel();
+            lblThermoPortStatus = new Label();
             colTimestamp = new DataGridViewTextBoxColumn();
             colUtCh1 = new DataGridViewTextBoxColumn();
             colUtCh2 = new DataGridViewTextBoxColumn();
-            tlpCommStatus = new TableLayoutPanel();
-            lblThermoPortStatus = new Label();
             pnlBacrground.SuspendLayout();
             tlpRoot.SuspendLayout();
             pnlHeader.SuspendLayout();
@@ -620,32 +620,6 @@ namespace ThermoBathCalibrator
             dataGridView1.Size = new Size(1160, 241);
             dataGridView1.TabIndex = 3;
             // 
-            // colTimestamp
-            // 
-            dataGridViewCellStyle2.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            colTimestamp.DefaultCellStyle = dataGridViewCellStyle2;
-            colTimestamp.FillWeight = 9F;
-            colTimestamp.HeaderText = "시간";
-            colTimestamp.MinimumWidth = 180;
-            colTimestamp.Name = "colTimestamp";
-            colTimestamp.ReadOnly = true;
-            // 
-            // colUtCh1
-            // 
-            colUtCh1.FillWeight = 9F;
-            colUtCh1.HeaderText = "항온조1";
-            colUtCh1.MinimumWidth = 80;
-            colUtCh1.Name = "colUtCh1";
-            colUtCh1.ReadOnly = true;
-            // 
-            // colUtCh2
-            // 
-            colUtCh2.FillWeight = 9F;
-            colUtCh2.HeaderText = "항온조2";
-            colUtCh2.MinimumWidth = 80;
-            colUtCh2.Name = "colUtCh2";
-            colUtCh2.ReadOnly = true;
-            // 
             // tlpCommStatus
             // 
             tlpCommStatus.BackColor = SystemColors.Control;
@@ -674,6 +648,32 @@ namespace ThermoBathCalibrator
             lblThermoPortStatus.TabIndex = 0;
             lblThermoPortStatus.Text = "BOARD";
             lblThermoPortStatus.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // colTimestamp
+            // 
+            dataGridViewCellStyle2.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            colTimestamp.DefaultCellStyle = dataGridViewCellStyle2;
+            colTimestamp.FillWeight = 9F;
+            colTimestamp.HeaderText = "시간";
+            colTimestamp.MinimumWidth = 80;
+            colTimestamp.Name = "colTimestamp";
+            colTimestamp.ReadOnly = true;
+            // 
+            // colUtCh1
+            // 
+            colUtCh1.FillWeight = 9F;
+            colUtCh1.HeaderText = "항온조1";
+            colUtCh1.MinimumWidth = 80;
+            colUtCh1.Name = "colUtCh1";
+            colUtCh1.ReadOnly = true;
+            // 
+            // colUtCh2
+            // 
+            colUtCh2.FillWeight = 9F;
+            colUtCh2.HeaderText = "항온조2";
+            colUtCh2.MinimumWidth = 80;
+            colUtCh2.Name = "colUtCh2";
+            colUtCh2.ReadOnly = true;
             // 
             // FormMain
             // 

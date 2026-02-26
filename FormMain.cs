@@ -504,9 +504,10 @@ namespace ThermoBathCalibrator
 
         private void ShowOffsetApplyStatus(int channel, double offset, bool success)
         {
-            string msg = success
-                ? $"CH{channel} Offset {offset.ToString("0.0", CultureInfo.InvariantCulture)} 적용"
-                : $"CH{channel} Offset {offset.ToString("0.0", CultureInfo.InvariantCulture)} 적용 실패";
+            //string msg = success
+            //    ? $"CH{channel} Offset {offset.ToString("0.0", CultureInfo.InvariantCulture)} 적용"
+            //    : $"CH{channel} Offset {offset.ToString("0.0", CultureInfo.InvariantCulture)} 적용 실패";
+            string msg = "";
 
             Color color = success ? Color.DeepSkyBlue : Color.OrangeRed;
 
