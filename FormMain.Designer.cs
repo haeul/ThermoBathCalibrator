@@ -59,19 +59,11 @@ namespace ThermoBathCalibrator
             chkShowOffsetCh2 = new CheckBox();
             lblCh2GraphOffset = new Label();
             dataGridView1 = new DataGridView();
+            tlpCommStatus = new TableLayoutPanel();
+            lblThermoPortStatus = new Label();
             colTimestamp = new DataGridViewTextBoxColumn();
             colUtCh1 = new DataGridViewTextBoxColumn();
             colUtCh2 = new DataGridViewTextBoxColumn();
-            colMax1 = new DataGridViewTextBoxColumn();
-            colMax2 = new DataGridViewTextBoxColumn();
-            colMin1 = new DataGridViewTextBoxColumn();
-            colMin2 = new DataGridViewTextBoxColumn();
-            colAverage1 = new DataGridViewTextBoxColumn();
-            colAverage2 = new DataGridViewTextBoxColumn();
-            colOffset1 = new DataGridViewTextBoxColumn();
-            colOffset2 = new DataGridViewTextBoxColumn();
-            tlpCommStatus = new TableLayoutPanel();
-            lblThermoPortStatus = new Label();
             pnlBacrground.SuspendLayout();
             tlpRoot.SuspendLayout();
             pnlHeader.SuspendLayout();
@@ -482,54 +474,51 @@ namespace ThermoBathCalibrator
             pnlCh1Graph.Name = "pnlCh1Graph";
             pnlCh1Graph.Size = new Size(570, 187);
             pnlCh1Graph.TabIndex = 0;
-            // 
-            // pnlCh1GraphOverlay
-            // 
-            pnlCh1GraphOverlay.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            pnlCh1GraphOverlay.BackColor = Color.FromArgb(245, 245, 245);
-            pnlCh1GraphOverlay.BorderStyle = BorderStyle.FixedSingle;
-            pnlCh1GraphOverlay.Controls.Add(lblCh1GraphOffsetState);
-            pnlCh1GraphOverlay.Controls.Add(chkShowOffsetCh1);
-            pnlCh1GraphOverlay.Controls.Add(lblCh1GraphOffset);
-            pnlCh1GraphOverlay.Location = new Point(381, 10);
-            pnlCh1GraphOverlay.Name = "pnlCh1GraphOverlay";
-            pnlCh1GraphOverlay.Size = new Size(125, 30);
-            pnlCh1GraphOverlay.TabIndex = 1;
-            // 
-            // lblCh1GraphOffsetState
-            // 
-            lblCh1GraphOffsetState.Dock = DockStyle.Fill;
-            lblCh1GraphOffsetState.Font = new Font("Segoe UI Semibold", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh1GraphOffsetState.Location = new Point(75, 0);
-            lblCh1GraphOffsetState.Margin = new Padding(0);
-            lblCh1GraphOffsetState.Name = "lblCh1GraphOffsetState";
-            lblCh1GraphOffsetState.Size = new Size(55, 28);
-            lblCh1GraphOffsetState.TabIndex = 0;
-            lblCh1GraphOffsetState.Text = "오프셋 그래프";
-            lblCh1GraphOffsetState.TextAlign = ContentAlignment.MiddleLeft;
-            // 
-            // chkShowOffsetCh1
-            // 
-            chkShowOffsetCh1.Checked = true;
-            chkShowOffsetCh1.CheckState = CheckState.Unchecked;
-            chkShowOffsetCh1.Dock = DockStyle.Left;
-            chkShowOffsetCh1.Location = new Point(55, 0);
-            chkShowOffsetCh1.Margin = new Padding(0);
-            chkShowOffsetCh1.Name = "chkShowOffsetCh1";
-            chkShowOffsetCh1.Size = new Size(20, 28);
-            chkShowOffsetCh1.TabIndex = 1;
-            // 
-            // lblCh1GraphOffset
-            // 
-            lblCh1GraphOffset.Dock = DockStyle.Left;
-            lblCh1GraphOffset.Font = new Font("Segoe UI Semibold", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh1GraphOffset.Location = new Point(0, 0);
-            lblCh1GraphOffset.Margin = new Padding(0);
-            lblCh1GraphOffset.Name = "lblCh1GraphOffset";
-            lblCh1GraphOffset.Size = new Size(5, 28);
-            lblCh1GraphOffset.TabIndex = 2;
-            lblCh1GraphOffset.Text = "";
-            lblCh1GraphOffset.TextAlign = ContentAlignment.MiddleLeft;
+            //// 
+            //// pnlCh1GraphOverlay
+            //// 
+            //pnlCh1GraphOverlay.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            //pnlCh1GraphOverlay.BackColor = Color.FromArgb(245, 245, 245);
+            //pnlCh1GraphOverlay.BorderStyle = BorderStyle.FixedSingle;
+            //pnlCh1GraphOverlay.Controls.Add(lblCh1GraphOffsetState);
+            //pnlCh1GraphOverlay.Controls.Add(chkShowOffsetCh1);
+            //pnlCh1GraphOverlay.Controls.Add(lblCh1GraphOffset);
+            //pnlCh1GraphOverlay.Location = new Point(381, 10);
+            //pnlCh1GraphOverlay.Name = "pnlCh1GraphOverlay";
+            //pnlCh1GraphOverlay.Size = new Size(125, 30);
+            //pnlCh1GraphOverlay.TabIndex = 1;
+            //// 
+            //// lblCh1GraphOffsetState
+            //// 
+            //lblCh1GraphOffsetState.Dock = DockStyle.Fill;
+            //lblCh1GraphOffsetState.Font = new Font("Segoe UI Semibold", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            //lblCh1GraphOffsetState.Location = new Point(25, 0);
+            //lblCh1GraphOffsetState.Margin = new Padding(0);
+            //lblCh1GraphOffsetState.Name = "lblCh1GraphOffsetState";
+            //lblCh1GraphOffsetState.Size = new Size(98, 28);
+            //lblCh1GraphOffsetState.TabIndex = 0;
+            //lblCh1GraphOffsetState.Text = "오프셋 그래프";
+            //lblCh1GraphOffsetState.TextAlign = ContentAlignment.MiddleLeft;
+            //// 
+            //// chkShowOffsetCh1
+            //// 
+            //chkShowOffsetCh1.Dock = DockStyle.Left;
+            //chkShowOffsetCh1.Location = new Point(5, 0);
+            //chkShowOffsetCh1.Margin = new Padding(0);
+            //chkShowOffsetCh1.Name = "chkShowOffsetCh1";
+            //chkShowOffsetCh1.Size = new Size(20, 28);
+            //chkShowOffsetCh1.TabIndex = 1;
+            //// 
+            //// lblCh1GraphOffset
+            //// 
+            //lblCh1GraphOffset.Dock = DockStyle.Left;
+            //lblCh1GraphOffset.Font = new Font("Segoe UI Semibold", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            //lblCh1GraphOffset.Location = new Point(0, 0);
+            //lblCh1GraphOffset.Margin = new Padding(0);
+            //lblCh1GraphOffset.Name = "lblCh1GraphOffset";
+            //lblCh1GraphOffset.Size = new Size(5, 28);
+            //lblCh1GraphOffset.TabIndex = 2;
+            //lblCh1GraphOffset.TextAlign = ContentAlignment.MiddleLeft;
             // 
             // pnlCh2GraphWrap
             // 
@@ -552,54 +541,51 @@ namespace ThermoBathCalibrator
             pnlCh2Graph.Name = "pnlCh2Graph";
             pnlCh2Graph.Size = new Size(570, 187);
             pnlCh2Graph.TabIndex = 0;
-            // 
-            // pnlCh2GraphOverlay
-            // 
-            pnlCh2GraphOverlay.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            pnlCh2GraphOverlay.BackColor = Color.FromArgb(245, 245, 245);
-            pnlCh2GraphOverlay.BorderStyle = BorderStyle.FixedSingle;
-            pnlCh2GraphOverlay.Controls.Add(lblCh2GraphOffsetState);
-            pnlCh2GraphOverlay.Controls.Add(chkShowOffsetCh2);
-            pnlCh2GraphOverlay.Controls.Add(lblCh2GraphOffset);
-            pnlCh2GraphOverlay.Location = new Point(381, 10);
-            pnlCh2GraphOverlay.Name = "pnlCh2GraphOverlay";
-            pnlCh2GraphOverlay.Size = new Size(125, 30);
-            pnlCh2GraphOverlay.TabIndex = 1;
-            // 
-            // lblCh2GraphOffsetState
-            // 
-            lblCh2GraphOffsetState.Dock = DockStyle.Fill;
-            lblCh2GraphOffsetState.Font = new Font("Segoe UI Semibold", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh2GraphOffsetState.Location = new Point(83, 0);
-            lblCh2GraphOffsetState.Margin = new Padding(0);
-            lblCh2GraphOffsetState.Name = "lblCh2GraphOffsetState";
-            lblCh2GraphOffsetState.Size = new Size(55, 28);
-            lblCh2GraphOffsetState.TabIndex = 0;
-            lblCh2GraphOffsetState.Text = "오프셋 그래프";
-            lblCh2GraphOffsetState.TextAlign = ContentAlignment.MiddleLeft;
-            // 
-            // chkShowOffsetCh2
-            // 
-            chkShowOffsetCh2.Checked = true;
-            chkShowOffsetCh2.CheckState = CheckState.Unchecked;
-            chkShowOffsetCh2.Dock = DockStyle.Left;
-            chkShowOffsetCh2.Location = new Point(55, 0);
-            chkShowOffsetCh2.Margin = new Padding(0);
-            chkShowOffsetCh2.Name = "chkShowOffsetCh2";
-            chkShowOffsetCh2.Size = new Size(20, 28);
-            chkShowOffsetCh2.TabIndex = 1;
-            // 
-            // lblCh2GraphOffset
-            // 
-            lblCh2GraphOffset.Dock = DockStyle.Left;
-            lblCh2GraphOffset.Font = new Font("Segoe UI Semibold", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblCh2GraphOffset.Location = new Point(0, 0);
-            lblCh2GraphOffset.Margin = new Padding(0);
-            lblCh2GraphOffset.Name = "lblCh2GraphOffset";
-            lblCh2GraphOffset.Size = new Size(5, 28);
-            lblCh2GraphOffset.TabIndex = 2;
-            lblCh2GraphOffset.Text = "";
-            lblCh2GraphOffset.TextAlign = ContentAlignment.MiddleLeft;
+            //// 
+            //// pnlCh2GraphOverlay
+            //// 
+            //pnlCh2GraphOverlay.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            //pnlCh2GraphOverlay.BackColor = Color.FromArgb(245, 245, 245);
+            //pnlCh2GraphOverlay.BorderStyle = BorderStyle.FixedSingle;
+            //pnlCh2GraphOverlay.Controls.Add(lblCh2GraphOffsetState);
+            //pnlCh2GraphOverlay.Controls.Add(chkShowOffsetCh2);
+            //pnlCh2GraphOverlay.Controls.Add(lblCh2GraphOffset);
+            //pnlCh2GraphOverlay.Location = new Point(381, 10);
+            //pnlCh2GraphOverlay.Name = "pnlCh2GraphOverlay";
+            //pnlCh2GraphOverlay.Size = new Size(125, 30);
+            //pnlCh2GraphOverlay.TabIndex = 1;
+            //// 
+            //// lblCh2GraphOffsetState
+            //// 
+            //lblCh2GraphOffsetState.Dock = DockStyle.Fill;
+            //lblCh2GraphOffsetState.Font = new Font("Segoe UI Semibold", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            //lblCh2GraphOffsetState.Location = new Point(25, 0);
+            //lblCh2GraphOffsetState.Margin = new Padding(0);
+            //lblCh2GraphOffsetState.Name = "lblCh2GraphOffsetState";
+            //lblCh2GraphOffsetState.Size = new Size(98, 28);
+            //lblCh2GraphOffsetState.TabIndex = 0;
+            //lblCh2GraphOffsetState.Text = "오프셋 그래프";
+            //lblCh2GraphOffsetState.TextAlign = ContentAlignment.MiddleLeft;
+            //// 
+            //// chkShowOffsetCh2
+            //// 
+            //chkShowOffsetCh2.Dock = DockStyle.Left;
+            //chkShowOffsetCh2.Location = new Point(5, 0);
+            //chkShowOffsetCh2.Margin = new Padding(0);
+            //chkShowOffsetCh2.Name = "chkShowOffsetCh2";
+            //chkShowOffsetCh2.Size = new Size(20, 28);
+            //chkShowOffsetCh2.TabIndex = 1;
+            //// 
+            //// lblCh2GraphOffset
+            //// 
+            //lblCh2GraphOffset.Dock = DockStyle.Left;
+            //lblCh2GraphOffset.Font = new Font("Segoe UI Semibold", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            //lblCh2GraphOffset.Location = new Point(0, 0);
+            //lblCh2GraphOffset.Margin = new Padding(0);
+            //lblCh2GraphOffset.Name = "lblCh2GraphOffset";
+            //lblCh2GraphOffset.Size = new Size(5, 28);
+            //lblCh2GraphOffset.TabIndex = 2;
+            //lblCh2GraphOffset.TextAlign = ContentAlignment.MiddleLeft;
             // 
             // dataGridView1
             // 
@@ -617,7 +603,7 @@ namespace ThermoBathCalibrator
             dataGridViewCellStyle1.WrapMode = DataGridViewTriState.False;
             dataGridView1.ColumnHeadersDefaultCellStyle = dataGridViewCellStyle1;
             dataGridView1.ColumnHeadersHeight = 40;
-            dataGridView1.Columns.AddRange(new DataGridViewColumn[] { colTimestamp, colUtCh1, colUtCh2, colMax1, colMax2, colMin1, colMin2, colAverage1, colAverage2, colOffset1, colOffset2 });
+            dataGridView1.Columns.AddRange(new DataGridViewColumn[] { colTimestamp, colUtCh1, colUtCh2 });
             dataGridViewCellStyle3.Alignment = DataGridViewContentAlignment.MiddleCenter;
             dataGridViewCellStyle3.BackColor = SystemColors.Window;
             dataGridViewCellStyle3.Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
@@ -635,96 +621,6 @@ namespace ThermoBathCalibrator
             dataGridView1.RowHeadersVisible = false;
             dataGridView1.Size = new Size(1160, 241);
             dataGridView1.TabIndex = 3;
-            // 
-            // colTimestamp
-            // 
-            dataGridViewCellStyle2.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            colTimestamp.DefaultCellStyle = dataGridViewCellStyle2;
-            colTimestamp.FillWeight = 18F;
-            colTimestamp.HeaderText = "시간";
-            colTimestamp.MinimumWidth = 180;
-            colTimestamp.Name = "colTimestamp";
-            colTimestamp.ReadOnly = true;
-            // 
-            // colUtCh1
-            // 
-            colUtCh1.FillWeight = 9F;
-            colUtCh1.HeaderText = "항온조1";
-            colUtCh1.MinimumWidth = 80;
-            colUtCh1.Name = "colUtCh1";
-            colUtCh1.ReadOnly = true;
-            // 
-            // colUtCh2
-            // 
-            colUtCh2.FillWeight = 9F;
-            colUtCh2.HeaderText = "항온조2";
-            colUtCh2.MinimumWidth = 80;
-            colUtCh2.Name = "colUtCh2";
-            colUtCh2.ReadOnly = true;
-            // 
-            // colMax1
-            // 
-            colMax1.FillWeight = 9F;
-            colMax1.HeaderText = "항온조1 최대값";
-            colMax1.MinimumWidth = 80;
-            colMax1.Name = "colMax1";
-            colMax1.ReadOnly = true;
-            // 
-            // colMax2
-            // 
-            colMax2.FillWeight = 9F;
-            colMax2.HeaderText = "항온조2 최대값";
-            colMax2.MinimumWidth = 80;
-            colMax2.Name = "colMax2";
-            colMax2.ReadOnly = true;
-            // 
-            // colMin1
-            // 
-            colMin1.FillWeight = 9F;
-            colMin1.HeaderText = "항온조1 최소값";
-            colMin1.MinimumWidth = 80;
-            colMin1.Name = "colMin1";
-            colMin1.ReadOnly = true;
-            // 
-            // colMin2
-            // 
-            colMin2.FillWeight = 9F;
-            colMin2.HeaderText = "항온조2 최소값";
-            colMin2.MinimumWidth = 80;
-            colMin2.Name = "colMin2";
-            colMin2.ReadOnly = true;
-            // 
-            // colAverage1
-            // 
-            colAverage1.FillWeight = 10F;
-            colAverage1.HeaderText = "항온조1 평균값";
-            colAverage1.MinimumWidth = 90;
-            colAverage1.Name = "colAverage1";
-            colAverage1.ReadOnly = true;
-            // 
-            // colAverage2
-            // 
-            colAverage2.FillWeight = 10F;
-            colAverage2.HeaderText = "항온조2 평균값";
-            colAverage2.MinimumWidth = 90;
-            colAverage2.Name = "colAverage2";
-            colAverage2.ReadOnly = true;
-            // 
-            // colOffset1
-            // 
-            colOffset1.FillWeight = 9F;
-            colOffset1.HeaderText = "항온조1 오프셋";
-            colOffset1.MinimumWidth = 80;
-            colOffset1.Name = "colOffset1";
-            colOffset1.ReadOnly = true;
-            // 
-            // colOffset2
-            // 
-            colOffset2.FillWeight = 9F;
-            colOffset2.HeaderText = "항온조2 오프셋";
-            colOffset2.MinimumWidth = 80;
-            colOffset2.Name = "colOffset2";
-            colOffset2.ReadOnly = true;
             // 
             // tlpCommStatus
             // 
@@ -754,6 +650,32 @@ namespace ThermoBathCalibrator
             lblThermoPortStatus.TabIndex = 0;
             lblThermoPortStatus.Text = "BOARD";
             lblThermoPortStatus.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // colTimestamp
+            // 
+            dataGridViewCellStyle2.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            colTimestamp.DefaultCellStyle = dataGridViewCellStyle2;
+            colTimestamp.FillWeight = 9F;
+            colTimestamp.HeaderText = "시간";
+            colTimestamp.MinimumWidth = 180;
+            colTimestamp.Name = "colTimestamp";
+            colTimestamp.ReadOnly = true;
+            // 
+            // colUtCh1
+            // 
+            colUtCh1.FillWeight = 9F;
+            colUtCh1.HeaderText = "항온조1";
+            colUtCh1.MinimumWidth = 80;
+            colUtCh1.Name = "colUtCh1";
+            colUtCh1.ReadOnly = true;
+            // 
+            // colUtCh2
+            // 
+            colUtCh2.FillWeight = 9F;
+            colUtCh2.HeaderText = "항온조2";
+            colUtCh2.MinimumWidth = 80;
+            colUtCh2.Name = "colUtCh2";
+            colUtCh2.ReadOnly = true;
             // 
             // FormMain
             // 
@@ -837,18 +759,10 @@ namespace ThermoBathCalibrator
 
         private TableLayoutPanel tlpCommStatus;
         private Label lblThermoPortStatus;
+        private Button btnStart;
+        private Button btnStop;
         private DataGridViewTextBoxColumn colTimestamp;
         private DataGridViewTextBoxColumn colUtCh1;
         private DataGridViewTextBoxColumn colUtCh2;
-        private DataGridViewTextBoxColumn colMax1;
-        private DataGridViewTextBoxColumn colMax2;
-        private DataGridViewTextBoxColumn colMin1;
-        private DataGridViewTextBoxColumn colMin2;
-        private DataGridViewTextBoxColumn colAverage1;
-        private DataGridViewTextBoxColumn colAverage2;
-        private DataGridViewTextBoxColumn colOffset1;
-        private DataGridViewTextBoxColumn colOffset2;
-        private Button btnStart;
-        private Button btnStop;
     }
 }

@@ -109,9 +109,9 @@ namespace ThermoBathCalibrator
                     new PointF(clientRect.Left + 5, y - 7));
             }
 
-            // ===== Right Offset Axis (-1.0 ~ 1.0, 0.1 step) =====
-            DrawRightOffsetAxis(g, axisFont, axisFontBold, axisBrush, axisBrushStrong, plot, plot.Right + 5,
-                FixedOffsetMinY, FixedOffsetMaxY);
+            //// ===== Right Offset Axis (-1.0 ~ 1.0, 0.1 step) =====
+            //DrawRightOffsetAxis(g, axisFont, axisFontBold, axisBrush, axisBrushStrong, plot, plot.Right + 5,
+            //    FixedOffsetMinY, FixedOffsetMaxY);
 
             // ===== Time axis =====
             if (_history == null || _history.Count < 2)
