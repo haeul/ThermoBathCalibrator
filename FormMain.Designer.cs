@@ -511,7 +511,7 @@ namespace ThermoBathCalibrator
             // chkShowOffsetCh1
             // 
             chkShowOffsetCh1.Checked = true;
-            chkShowOffsetCh1.CheckState = CheckState.Checked;
+            chkShowOffsetCh1.CheckState = CheckState.Unchecked;
             chkShowOffsetCh1.Dock = DockStyle.Left;
             chkShowOffsetCh1.Location = new Point(55, 0);
             chkShowOffsetCh1.Margin = new Padding(0);
@@ -581,7 +581,7 @@ namespace ThermoBathCalibrator
             // chkShowOffsetCh2
             // 
             chkShowOffsetCh2.Checked = true;
-            chkShowOffsetCh2.CheckState = CheckState.Checked;
+            chkShowOffsetCh2.CheckState = CheckState.Unchecked;
             chkShowOffsetCh2.Dock = DockStyle.Left;
             chkShowOffsetCh2.Location = new Point(55, 0);
             chkShowOffsetCh2.Margin = new Padding(0);
