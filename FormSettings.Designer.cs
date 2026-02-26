@@ -32,7 +32,6 @@ namespace ThermoBathCalibrator
             btnWriteCh2Sv = new Button();
             btnSave = new Button();
             btnClose = new Button();
-            chkEnableOffsetControl = new CheckBox();
             grpMultiBoard.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)numMbPort).BeginInit();
             ((System.ComponentModel.ISupportInitialize)numMbUnitId).BeginInit();
@@ -192,23 +191,11 @@ namespace ThermoBathCalibrator
             btnClose.TabIndex = 3;
             btnClose.Text = "닫기";
             // 
-            // chkEnableOffsetControl
-            // 
-            chkEnableOffsetControl.AutoSize = true;
-            chkEnableOffsetControl.Font = new Font("Segoe UI", 11.25F, FontStyle.Regular, GraphicsUnit.Point, 0);
-            chkEnableOffsetControl.Location = new Point(274, 274);
-            chkEnableOffsetControl.Name = "chkEnableOffsetControl";
-            chkEnableOffsetControl.Size = new Size(156, 24);
-            chkEnableOffsetControl.TabIndex = 6;
-            chkEnableOffsetControl.Text = "오프셋 보정 활성화";
-            chkEnableOffsetControl.UseVisualStyleBackColor = true;
-            // 
             // FormSettings
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(444, 355);
-            Controls.Add(chkEnableOffsetControl);
             Controls.Add(grpMultiBoard);
             Controls.Add(grpDeviceSv);
             Controls.Add(btnSave);
@@ -247,6 +234,5 @@ namespace ThermoBathCalibrator
         private Button btnWriteCh2Sv;
         private Button btnSave;
         private Button btnClose;
-        private CheckBox chkEnableOffsetControl;
     }
 }

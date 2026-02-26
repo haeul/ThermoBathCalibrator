@@ -23,14 +23,24 @@ namespace ThermoBathCalibrator
             pnlCh1GraphOverlay.BringToFront();
             pnlCh2GraphOverlay.BringToFront();
 
-            //// Dock 순서 강제: Left(Offset 라벨) -> Left(체크박스) -> Fill(ON/OFF 라벨)
-            //pnlCh1GraphOverlay.Controls.SetChildIndex(lblCh1GraphOffset, 2);
-            //pnlCh1GraphOverlay.Controls.SetChildIndex(chkShowOffsetCh1, 1);
-            //pnlCh1GraphOverlay.Controls.SetChildIndex(lblCh1GraphOffsetState, 0);
+            // Dock 순서 강제: Left(Offset 라벨) -> Left(체크박스) -> Fill(ON/OFF 라벨)
+            pnlCh1GraphOverlay.Controls.SetChildIndex(lblCh1GraphOffset, 2);
+            pnlCh1GraphOverlay.Controls.SetChildIndex(chkShowOffsetCh1, 1);
+            pnlCh1GraphOverlay.Controls.SetChildIndex(lblCh1GraphOffsetState, 0);
 
-            //pnlCh2GraphOverlay.Controls.SetChildIndex(lblCh2GraphOffset, 2);
-            //pnlCh2GraphOverlay.Controls.SetChildIndex(chkShowOffsetCh2, 1);
-            //pnlCh2GraphOverlay.Controls.SetChildIndex(lblCh2GraphOffsetState, 0);
+            pnlCh2GraphOverlay.Controls.SetChildIndex(lblCh2GraphOffset, 2);
+            pnlCh2GraphOverlay.Controls.SetChildIndex(chkShowOffsetCh2, 1);
+            pnlCh2GraphOverlay.Controls.SetChildIndex(lblCh2GraphOffsetState, 0);
+
+            lblCh1OffsetTitle.Visible = false;
+            lblCh1OffsetValue.Visible = false;
+            nudOffsetCh1.Visible = false;
+            btnOffsetApplyCh1.Visible = false;
+            lblCh2OffsetTitle.Visible = false;
+            lblCh2OffsetValue.Visible = false;
+            nudOffsetCh2.Visible = false;
+            btnOffsetApplyCh2.Visible = false;
+
 
             btnStart.Click += BtnStart_Click;
             btnStop.Click += BtnStop_Click;
@@ -43,14 +53,14 @@ namespace ThermoBathCalibrator
 
             nudOffsetCh1.DecimalPlaces = 1;
             nudOffsetCh1.Increment = 0.1M;
-            nudOffsetCh1.Minimum = -4.0M;
-            nudOffsetCh1.Maximum = 4.0M;
+            nudOffsetCh1.Minimum = -10.0M;
+            nudOffsetCh1.Maximum = 10.0M;
             nudOffsetCh1.Value = 0.0M;
 
             nudOffsetCh2.DecimalPlaces = 1;
             nudOffsetCh2.Increment = 0.1M;
-            nudOffsetCh2.Minimum = -4.0M;
-            nudOffsetCh2.Maximum = 4.0M;
+            nudOffsetCh2.Minimum = -10.0M;
+            nudOffsetCh2.Maximum = 10.0M;
             nudOffsetCh2.Value = 0.0M;
 
             pnlCh1Graph.Paint += PnlCh1Graph_Paint;
@@ -111,8 +121,8 @@ namespace ThermoBathCalibrator
             bool on = _enableOffsetControl;
 
             // 수동 조작 UI도 같이 잠그기
-            
-            
+
+
             btnOffsetApplyCh1.Enabled = on;
             btnOffsetApplyCh2.Enabled = on;
             nudOffsetCh1.Enabled = on;
@@ -282,7 +292,7 @@ namespace ThermoBathCalibrator
 
                     ApplyMultiBoardEndpoint(dlg.AppliedHost, dlg.AppliedPort, dlg.AppliedUnitId);
 
-                    _enableOffsetControl = dlg.AppliedEnableOffsetControl;
+                    // _enableOffsetControl = dlg.AppliedEnableOffsetControl;
                     ApplyOffsetControlUiLock();
 
                     // 실행 중에 ON -> OFF로 바뀌면 자동 보정 상태를 초기화해두는 게 안전
