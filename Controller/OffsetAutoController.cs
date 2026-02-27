@@ -25,10 +25,10 @@ namespace ThermoBathCalibrator.Controller
         // =========================
         private const int DEADBAND_MILLI = 20;              // ±0.02°C
         private const int SLOPE_THRESHOLD_MILLI = 5;        // 0.005°C/s (이미 충분히 움직이면 추가 조치 스킵)
-        private const int MIN_ACTION_INTERVAL_MS = 50000;   // 일반 모드 최소 조치 간격(대략 50s)
+        private const int MIN_ACTION_INTERVAL_MS = 30000;   // 일반 모드 최소 조치 간격(대략 50s)
 
         // Follow-up(사후 보정): 목표 통과 후 이 정도 벗어나면 1회 보정
-        private const int FOLLOW_UP_THRESHOLD_MILLI = 10;   // ±0.01°C
+        private const int FOLLOW_UP_THRESHOLD_MILLI = 5;   // ±0.005°C
 
         // =========================
         // Fast converge (|err| >= 0.10°C) 전용
@@ -42,20 +42,20 @@ namespace ThermoBathCalibrator.Controller
         // Predictive Brake (사전 감속)
         // =========================
         // 목표 근처에서 slope 때문에 곧 통과할 것 같으면, 오차 부호 바뀌기 전에 미리 반대성격 조치를 넣어 과속을 줄임
-        private const int PB_ARM_ERR_MILLI = 50;          // ±0.05°C 이내에서만 브레이크 활성
+        private const int PB_ARM_ERR_MILLI = 100;          // ±0.1°C 이내에서만 브레이크 활성
         private const int PB_MIN_SLOPE_MILLI = 1;         // 0.001°C/s 미만 slope는 노이즈로 보고 무시
-        private const int PB_HORIZON_SEC = 25;            // 25초 뒤 예측
-        private const int PB_COOLDOWN_MS = 50000;         // Predictive Brake 연타 방지(50s)
+        private const int PB_HORIZON_SEC = 45;            // 45초 뒤 예측
+        private const int PB_COOLDOWN_MS = 10000;         // Predictive Brake 연타 방지(10s)
 
         // =========================
         // Near Pulse (목표 근처 파동을 더 붙이기)
         // =========================
         // deadband 밖이지만 목표 근처(예: 0.02~0.04 정도)에서,
         // slope 방향으로 "곧 더 멀어질" 기미가 보이면 0.1 step을 1회만 살짝 넣어 파동 중심을 25.000에 붙임
-        private const int NP_ARM_ERR_MILLI = 40;           // ±0.04°C 이내에서만 Near Pulse 허용
+        private const int NP_ARM_ERR_MILLI = 30;           // ±0.03°C 이내에서만 Near Pulse 허용
         private const int NP_MIN_ERR_MILLI = DEADBAND_MILLI; // deadband(0.02) 밖에서만(즉 0.02 < |err| <= 0.04)
-        private const int NP_MIN_SLOPE_MILLI = 1;          // 0.002°C/s 이상일 때만 의미 있다고 판단
-        private const int NP_COOLDOWN_MS = 60000;          // Near Pulse 연타 방지(60s)
+        private const int NP_MIN_SLOPE_MILLI = 1;          // 0.001°C/s 이상일 때만 의미 있다고 판단
+        private const int NP_COOLDOWN_MS = 30000;          // Near Pulse 연타 방지(30s)
 
         private enum TempDirection
         {

@@ -322,7 +322,7 @@ namespace ThermoBathCalibrator
             if (!EnsureAdminAuthenticated())
                 return;
 
-            using (var dlg = new FormAdminSettings(_utBiasCh1, _utBiasCh2, _bath1FineTarget, _bath2FineTarget))
+            using (var dlg = new FormAdminSettings(_utBiasCh1, _utBiasCh2, _bath1FineTarget, _bath2FineTarget, _enableOffsetControl))
             {
                 dlg.FormClosed += (_, __) => _isAdminAuthenticated = false;
 
@@ -334,6 +334,13 @@ namespace ThermoBathCalibrator
 
                 _bath1FineTarget = dlg.SetpointCh1;
                 _bath2FineTarget = dlg.SetpointCh2;
+
+                _enableOffsetControl = dlg.AppliedEnableOffsetControl;
+
+                CommSettings settings = CommSettings.LoadOrDefault(CommSettings.GetDefaultPath());
+                settings.EnableOffsetControl = _enableOffsetControl;
+                settings.Save(CommSettings.GetDefaultPath());
+                ApplyOffsetControlUiLock();
 
                 UpdateFineTargetAndMaybeWriteCoarse(1, _bath1FineTarget, "ADMIN_FINE_TARGET");
                 UpdateFineTargetAndMaybeWriteCoarse(2, _bath2FineTarget, "ADMIN_FINE_TARGET");
