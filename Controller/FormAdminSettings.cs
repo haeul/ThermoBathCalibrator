@@ -5,12 +5,16 @@ namespace ThermoBathCalibrator
 {
     public partial class FormAdminSettings : Form
     {
+        // offset 보정 on/off
+        public bool AppliedEnableOffsetControl => chkEnableOffsetControl.Checked;
+
+
         public double UtBiasCh1 => (double)nudUtBiasCh1.Value;
         public double UtBiasCh2 => (double)nudUtBiasCh2.Value;
         public double SetpointCh1 => (double)nudSetpointCh1.Value;
         public double SetpointCh2 => (double)nudSetpointCh2.Value;
 
-        public FormAdminSettings(double utBiasCh1, double utBiasCh2, double setpointCh1, double setpointCh2)
+        public FormAdminSettings(double utBiasCh1, double utBiasCh2, double setpointCh1, double setpointCh2, bool enableOffsetControl)
         {
             InitializeComponent();
 
@@ -18,6 +22,8 @@ namespace ThermoBathCalibrator
             nudUtBiasCh2.Value = ClampToNumeric(nudUtBiasCh2, utBiasCh2);
             nudSetpointCh1.Value = ClampToNumeric(nudSetpointCh1, setpointCh1);
             nudSetpointCh2.Value = ClampToNumeric(nudSetpointCh2, setpointCh2);
+
+            chkEnableOffsetControl.Checked = enableOffsetControl;
         }
 
         private static decimal ClampToNumeric(NumericUpDown nud, double value)

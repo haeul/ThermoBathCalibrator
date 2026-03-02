@@ -10,9 +10,6 @@ namespace ThermoBathCalibrator
         private readonly Func<int, double, bool> _tryWriteDeviceSv;
         private CommSettings _settings;
 
-        // offset 보정 on/off
-        public bool AppliedEnableOffsetControl => chkEnableOffsetControl.Checked;
-
         public string AppliedHost => txtMbHost.Text.Trim();
         public int AppliedPort => (int)numMbPort.Value;
         public byte AppliedUnitId => (byte)numMbUnitId.Value;
@@ -48,8 +45,6 @@ namespace ThermoBathCalibrator
             nudCh1Sv.Value = Clamp(nudCh1Sv, ch1Sv);
             nudCh2Sv.Value = Clamp(nudCh2Sv, ch2Sv);
 
-            // 체크박스 초기값: 저장값이 있으면 저장값 우선, 없으면 FormMain에서 넘어온 값 사용
-            chkEnableOffsetControl.Checked = ReadEnableOffsetControlOrFallback(enableOffsetControl);
 
             btnSave.Click += BtnSave_Click;
             btnWriteCh1Sv.Click += BtnWriteCh1Sv_Click;
@@ -122,9 +117,6 @@ namespace ThermoBathCalibrator
             _settings.MultiBoard.Host = txtMbHost.Text.Trim();
             _settings.MultiBoard.Port = (int)numMbPort.Value;
             _settings.MultiBoard.UnitId = (int)numMbUnitId.Value;
-
-            // offset 보정 on/off 저장
-            WriteEnableOffsetControlToSettings(chkEnableOffsetControl.Checked);
 
             _settings.Save(_path);
             DialogResult = DialogResult.OK;

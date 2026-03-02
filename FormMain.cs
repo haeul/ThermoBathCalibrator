@@ -32,6 +32,16 @@ namespace ThermoBathCalibrator
             pnlCh2GraphOverlay.Controls.SetChildIndex(chkShowOffsetCh2, 1);
             pnlCh2GraphOverlay.Controls.SetChildIndex(lblCh2GraphOffsetState, 0);
 
+            lblCh1OffsetTitle.Visible = false;
+            lblCh1OffsetValue.Visible = false;
+            nudOffsetCh1.Visible = false;
+            btnOffsetApplyCh1.Visible = false;
+            lblCh2OffsetTitle.Visible = false;
+            lblCh2OffsetValue.Visible = false;
+            nudOffsetCh2.Visible = false;
+            btnOffsetApplyCh2.Visible = false;
+
+
             btnStart.Click += BtnStart_Click;
             btnStop.Click += BtnStop_Click;
 
@@ -43,14 +53,14 @@ namespace ThermoBathCalibrator
 
             nudOffsetCh1.DecimalPlaces = 1;
             nudOffsetCh1.Increment = 0.1M;
-            nudOffsetCh1.Minimum = -1.0M;
-            nudOffsetCh1.Maximum = 1.0M;
+            nudOffsetCh1.Minimum = -10.0M;
+            nudOffsetCh1.Maximum = 10.0M;
             nudOffsetCh1.Value = 0.0M;
 
             nudOffsetCh2.DecimalPlaces = 1;
             nudOffsetCh2.Increment = 0.1M;
-            nudOffsetCh2.Minimum = -1.0M;
-            nudOffsetCh2.Maximum = 1.0M;
+            nudOffsetCh2.Minimum = -10.0M;
+            nudOffsetCh2.Maximum = 10.0M;
             nudOffsetCh2.Value = 0.0M;
 
             pnlCh1Graph.Paint += PnlCh1Graph_Paint;
@@ -111,6 +121,8 @@ namespace ThermoBathCalibrator
             bool on = _enableOffsetControl;
 
             // 수동 조작 UI도 같이 잠그기
+
+
             btnOffsetApplyCh1.Enabled = on;
             btnOffsetApplyCh2.Enabled = on;
             nudOffsetCh1.Enabled = on;
@@ -280,7 +292,7 @@ namespace ThermoBathCalibrator
 
                     ApplyMultiBoardEndpoint(dlg.AppliedHost, dlg.AppliedPort, dlg.AppliedUnitId);
 
-                    _enableOffsetControl = dlg.AppliedEnableOffsetControl;
+                    // _enableOffsetControl = dlg.AppliedEnableOffsetControl;
                     ApplyOffsetControlUiLock();
 
                     // 실행 중에 ON -> OFF로 바뀌면 자동 보정 상태를 초기화해두는 게 안전
@@ -310,7 +322,7 @@ namespace ThermoBathCalibrator
             if (!EnsureAdminAuthenticated())
                 return;
 
-            using (var dlg = new FormAdminSettings(_utBiasCh1, _utBiasCh2, _bath1FineTarget, _bath2FineTarget))
+            using (var dlg = new FormAdminSettings(_utBiasCh1, _utBiasCh2, _bath1FineTarget, _bath2FineTarget, _enableOffsetControl))
             {
                 dlg.FormClosed += (_, __) => _isAdminAuthenticated = false;
 
@@ -322,6 +334,13 @@ namespace ThermoBathCalibrator
 
                 _bath1FineTarget = dlg.SetpointCh1;
                 _bath2FineTarget = dlg.SetpointCh2;
+
+                _enableOffsetControl = dlg.AppliedEnableOffsetControl;
+
+                CommSettings settings = CommSettings.LoadOrDefault(CommSettings.GetDefaultPath());
+                settings.EnableOffsetControl = _enableOffsetControl;
+                settings.Save(CommSettings.GetDefaultPath());
+                ApplyOffsetControlUiLock();
 
                 UpdateFineTargetAndMaybeWriteCoarse(1, _bath1FineTarget, "ADMIN_FINE_TARGET");
                 UpdateFineTargetAndMaybeWriteCoarse(2, _bath2FineTarget, "ADMIN_FINE_TARGET");
@@ -492,9 +511,10 @@ namespace ThermoBathCalibrator
 
         private void ShowOffsetApplyStatus(int channel, double offset, bool success)
         {
-            string msg = success
-                ? $"CH{channel} Offset {offset.ToString("0.0", CultureInfo.InvariantCulture)} 적용"
-                : $"CH{channel} Offset {offset.ToString("0.0", CultureInfo.InvariantCulture)} 적용 실패";
+            //string msg = success
+            //    ? $"CH{channel} Offset {offset.ToString("0.0", CultureInfo.InvariantCulture)} 적용"
+            //    : $"CH{channel} Offset {offset.ToString("0.0", CultureInfo.InvariantCulture)} 적용 실패";
+            string msg = "";
 
             Color color = success ? Color.DeepSkyBlue : Color.OrangeRed;
 
