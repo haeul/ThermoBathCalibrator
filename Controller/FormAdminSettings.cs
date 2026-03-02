@@ -14,7 +14,7 @@ namespace ThermoBathCalibrator
         public double SetpointCh1 => (double)nudSetpointCh1.Value;
         public double SetpointCh2 => (double)nudSetpointCh2.Value;
 
-        public FormAdminSettings(double utBiasCh1, double utBiasCh2, double setpointCh1, double setpointCh2)
+        public FormAdminSettings(double utBiasCh1, double utBiasCh2, double setpointCh1, double setpointCh2, bool enableOffsetControl)
         {
             InitializeComponent();
 
@@ -23,9 +23,13 @@ namespace ThermoBathCalibrator
             nudSetpointCh1.Value = ClampToNumeric(nudSetpointCh1, setpointCh1);
             nudSetpointCh2.Value = ClampToNumeric(nudSetpointCh2, setpointCh2);
 
+<<<<<<< HEAD
             // 체크박스 초기값: 저장값이 있으면 저장값 우선, 없으면 FormMain에서 넘어온 값 사용
             // chkEnableOffsetControl.Checked = ReadEnableOffsetControlOrFallback(enableOffsetControl);
             chkEnableOffsetControl.Checked = true;
+=======
+            chkEnableOffsetControl.Checked = enableOffsetControl;
+>>>>>>> Offset-UI
         }
 
         private static decimal ClampToNumeric(NumericUpDown nud, double value)
