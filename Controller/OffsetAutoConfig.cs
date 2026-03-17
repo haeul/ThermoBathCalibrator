@@ -4,8 +4,8 @@
     {
         // Offset quantization and clamp
         public double OffsetStep { get; set; } = 0.1;
-        public double OffsetClampMin { get; set; } = -1.0;
-        public double OffsetClampMax { get; set; } = 1.0;
+        public double OffsetClampMin { get; set; } = -20.0;
+        public double OffsetClampMax { get; set; } = 20.0;
 
         // Target and write pacing
         public double TargetTemperature { get; set; } = 25.0;

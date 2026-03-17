@@ -32,14 +32,14 @@ namespace ThermoBathCalibrator
             pnlCh2GraphOverlay.Controls.SetChildIndex(chkShowOffsetCh2, 1);
             pnlCh2GraphOverlay.Controls.SetChildIndex(lblCh2GraphOffsetState, 0);
 
-            lblCh1OffsetTitle.Visible = false;
-            lblCh1OffsetValue.Visible = false;
-            nudOffsetCh1.Visible = false;
-            btnOffsetApplyCh1.Visible = false;
-            lblCh2OffsetTitle.Visible = false;
-            lblCh2OffsetValue.Visible = false;
-            nudOffsetCh2.Visible = false;
-            btnOffsetApplyCh2.Visible = false;
+            lblCh1OffsetTitle.Visible = true;
+            lblCh1OffsetValue.Visible = true;
+            nudOffsetCh1.Visible = true;
+            btnOffsetApplyCh1.Visible = true;
+            lblCh2OffsetTitle.Visible = true;
+            lblCh2OffsetValue.Visible = true;
+            nudOffsetCh2.Visible = true;
+            btnOffsetApplyCh2.Visible = true;
 
 
             btnStart.Click += BtnStart_Click;
