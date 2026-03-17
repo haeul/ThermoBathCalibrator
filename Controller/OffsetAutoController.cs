@@ -1,92 +1,124 @@
 ﻿using System;
+using System.Collections.Generic;
 
 namespace ThermoBathCalibrator.Controller
 {
     internal sealed class OffsetAutoController
     {
         // =========================================================
-        // 목표: 25.000°C 근처에서 "안정적으로 붙도록" 헌팅/오버슈트 최소화
-        // 제약: offset 최소 단위는 0.1(step) (장비 한계)
-        //
-        // 구조(우선순위):
-        //  1) 입력 유효성/채널 체크
-        //  2) offset mismatch resend (내부 상태 vs 장비 읽힘 불일치)
-        //  3) Follow-up(사후 보정) : 목표 통과 후 일정 이상 벗어나면 1회 보정
-        //  4) slope 계산
-        //  5) Fast converge(|err| >= 0.10°C) : 멀리 있으면 빠르게, 단 안전장치 포함
-        //  6) Deadband(|err| <= 0.02°C) : 원칙적으로 손대지 않음(안정 우선)
-        //  7) Predictive Brake(사전 감속) : 목표 근처에서 "곧 통과" 예상되면 미리 브레이크
-        //  8) Near Pulse(근처 파동 붙이기) : 목표 근처에서 미세한 파동을 목표에 더 붙게 "한 번만" 살짝 보정
-        //  9) 일반 모드(최소 간격 + slope guard)
+        // TUNING PARAMETERS
+        // 아래 숫자들은 현장 테스트 후 가장 먼저 조정할 후보들이다.
         // =========================================================
 
-        // =========================
-        // 기본 제어 상수 (m°C 단위)
-        // =========================
-        private const int DEADBAND_MILLI = 20;              // ±0.02°C
-        private const int SLOPE_THRESHOLD_MILLI = 5;        // 0.005°C/s (이미 충분히 움직이면 추가 조치 스킵)
-        private const int MIN_ACTION_INTERVAL_MS = 50000;   // 일반 모드 최소 조치 간격(대략 50s)
+        // 오차 구간 (°C)
+        private const double LOCK_ERR_MAX = 0.020;
+        private const double NEAR_ERR_MAX = 0.080;
+        private const double APPROACH_ERR_MAX = 0.300;
 
-        // Follow-up(사후 보정): 목표 통과 후 이 정도 벗어나면 1회 보정
-        private const int FOLLOW_UP_THRESHOLD_MILLI = 10;   // ±0.01°C
+        // Lock pulse 진입 편향 최소치 (°C)
+        private const double LOCK_PULSE_BIAS_MIN = 0.005;
 
-        // =========================
-        // Fast converge (|err| >= 0.10°C) 전용
-        // =========================
-        private const int FAST_BAND_MILLI = 100;               // 0.10°C
-        private const int FAST_MIN_ACTION_INTERVAL_MS = 90000; // fast 모드 최소 간격(90s)
-        private const int FAST_SLOPE_OK_MILLI = 20;            // 0.020°C/s 이상으로 이미 움직이면 스킵
-        private const int FAST_MAX_BURST_WRITES = 6;           // fast 모드 안전 상한(연속 write 제한)
+        // 기울기 계산 창 (초)
+        private const int SLOPE_MAIN_WINDOW_SEC = 30;
+        private const int SLOPE_FAST_WINDOW_SEC = 10;
+        private const int IMPROVEMENT_WINDOW_SEC = 90;
 
-        // =========================
-        // Predictive Brake (사전 감속)
-        // =========================
-        // 목표 근처에서 slope 때문에 곧 통과할 것 같으면, 오차 부호 바뀌기 전에 미리 반대성격 조치를 넣어 과속을 줄임
-        private const int PB_ARM_ERR_MILLI = 50;          // ±0.05°C 이내에서만 브레이크 활성
-        private const int PB_MIN_SLOPE_MILLI = 1;         // 0.001°C/s 미만 slope는 노이즈로 보고 무시
-        private const int PB_HORIZON_SEC = 25;            // 25초 뒤 예측
-        private const int PB_COOLDOWN_MS = 50000;         // Predictive Brake 연타 방지(50s)
+        // 구간별 목표 기울기 밴드 (°C/min, 목표 방향 기준의 양수값)
+        private const double FAR_SLOPE_MIN = 0.05;
+        private const double FAR_SLOPE_MAX = 0.15;
 
-        // =========================
-        // Near Pulse (목표 근처 파동을 더 붙이기)
-        // =========================
-        // deadband 밖이지만 목표 근처(예: 0.02~0.04 정도)에서,
-        // slope 방향으로 "곧 더 멀어질" 기미가 보이면 0.1 step을 1회만 살짝 넣어 파동 중심을 25.000에 붙임
-        private const int NP_ARM_ERR_MILLI = 40;           // ±0.04°C 이내에서만 Near Pulse 허용
-        private const int NP_MIN_ERR_MILLI = DEADBAND_MILLI; // deadband(0.02) 밖에서만(즉 0.02 < |err| <= 0.04)
-        private const int NP_MIN_SLOPE_MILLI = 1;          // 0.002°C/s 이상일 때만 의미 있다고 판단
-        private const int NP_COOLDOWN_MS = 60000;          // Near Pulse 연타 방지(60s)
+        private const double APPROACH_SLOPE_MIN = 0.02;
+        private const double APPROACH_SLOPE_MAX = 0.08;
 
-        private enum TempDirection
+        private const double NEAR_SLOPE_MIN = 0.005;
+        private const double NEAR_SLOPE_MAX = 0.03;
+
+        private const double LOCK_SLOPE_MAX = 0.01;
+
+        // 평평하다고 볼 기준 (°C/min)
+        private const double LOCK_PULSE_FLAT_SLOPE_MAX = 0.015;
+
+        // 기울기 과속 판정 여유치 (°C/min)
+        private const double SLOPE_OVERSPEED_MARGIN = 0.01;
+
+        // 최근 오차 개선 최소치 (°C)
+        private const double MIN_IMPROVEMENT_IN_WINDOW = 0.03;
+
+        // 같은 방향 write 최소 간격 (초)
+        private const int FAR_SAME_DIR_INTERVAL_SEC = 90;
+        private const int APPROACH_SAME_DIR_INTERVAL_SEC = 120;
+        private const int NEAR_SAME_DIR_INTERVAL_SEC = 150;
+
+        // 반대 방향 감속 write 최소 간격 (초)
+        private const int FAR_BRAKE_INTERVAL_SEC = 45;
+        private const int APPROACH_BRAKE_INTERVAL_SEC = 45;
+        private const int NEAR_BRAKE_INTERVAL_SEC = 30;
+        private const int LOCK_BRAKE_INTERVAL_SEC = 30;
+
+        // 같은 방향 연속 write 허용 횟수
+        private const int FAR_MAX_SAME_DIR_WRITES = 3;
+        private const int APPROACH_MAX_SAME_DIR_WRITES = 2;
+        private const int NEAR_MAX_SAME_DIR_WRITES = 1;
+
+        // Lock pulse
+        private const int LOCK_PULSE_STABLE_SEC = 60;
+        private const int LOCK_PULSE_HOLD_SEC = 15;
+        private const int LOCK_PULSE_COOLDOWN_SEC = 120;
+
+        // Pulse 도중 조건이 틀어졌을 때 조기 복귀 기준
+        private const double LOCK_PULSE_ABORT_ERR = 0.025;
+
+        // 내부 히스토리 유지 시간
+        private const int HISTORY_KEEP_SEC = 300;
+
+        // read-back mismatch 허용 오차
+        private const double OFFSET_MATCH_EPS = 0.05;
+
+        // =========================================================
+        // INTERNAL TYPES
+        // =========================================================
+
+        private enum Region
         {
-            Init = 0,
-            Up,    // 가열 방향으로 조치했던 상태(논리 플래그)
-            Down   // 냉각 방향으로 조치했던 상태(논리 플래그)
+            Lock = 0,
+            Near,
+            Approach,
+            Far
+        }
+
+        private enum OffsetDirection
+        {
+            None = 0,
+            Heat, // offset 감소 방향
+            Cool  // offset 증가 방향
+        }
+
+        private sealed class TempSample
+        {
+            public DateTime At;
+            public double Temp;
         }
 
         private sealed class ChannelState
         {
-            // 내부적으로 "내가 마지막으로 썼다고 믿는 offset"
             public double CurrentBathOffset = double.NaN;
 
-            // slope 계산용(이전 온도)
-            public int? PrevTempMilli;
+            public readonly List<TempSample> TempHistory = new List<TempSample>();
 
-            // Follow-up 보정용(이전에 어떤 방향 조치를 했는지)
-            public TempDirection PrevAction = TempDirection.Init;
+            public DateTime LastSameDirectionWriteAt = DateTime.MinValue;
+            public DateTime LastBrakeWriteAt = DateTime.MinValue;
 
-            // 일반 모드 최소 간격 제어용
-            public DateTime LastActionAt = DateTime.MinValue;
+            public OffsetDirection LastWriteDirection = OffsetDirection.None;
+            public int ConsecutiveSameDirectionWrites = 0;
 
-            // fast 모드 상태
-            public DateTime LastFastActionAt = DateTime.MinValue;
-            public int FastBurstWrites = 0;
+            public DateTime? LockFlatBiasSince = null;
+            public int LockBiasSign = 0;
 
-            // Predictive Brake 쿨다운
-            public DateTime LastPredictiveBrakeAt = DateTime.MinValue;
-
-            // Near Pulse 쿨다운
-            public DateTime LastNearPulseAt = DateTime.MinValue;
+            public bool LockPulseActive = false;
+            public DateTime LockPulseStartedAt = DateTime.MinValue;
+            public DateTime LockPulseLastEndedAt = DateTime.MinValue;
+            public double LockPulseBaseOffset = double.NaN;
+            public OffsetDirection LockPulseDirection = OffsetDirection.None;
         }
 
         private readonly OffsetAutoConfig _cfg;
@@ -108,16 +140,23 @@ namespace ThermoBathCalibrator.Controller
         private static void ResetChannel(ChannelState st)
         {
             st.CurrentBathOffset = double.NaN;
-            st.PrevTempMilli = null;
-            st.PrevAction = TempDirection.Init;
 
-            st.LastActionAt = DateTime.MinValue;
+            st.TempHistory.Clear();
 
-            st.LastFastActionAt = DateTime.MinValue;
-            st.FastBurstWrites = 0;
+            st.LastSameDirectionWriteAt = DateTime.MinValue;
+            st.LastBrakeWriteAt = DateTime.MinValue;
 
-            st.LastPredictiveBrakeAt = DateTime.MinValue;
-            st.LastNearPulseAt = DateTime.MinValue;
+            st.LastWriteDirection = OffsetDirection.None;
+            st.ConsecutiveSameDirectionWrites = 0;
+
+            st.LockFlatBiasSince = null;
+            st.LockBiasSign = 0;
+
+            st.LockPulseActive = false;
+            st.LockPulseStartedAt = DateTime.MinValue;
+            st.LockPulseLastEndedAt = DateTime.MinValue;
+            st.LockPulseBaseOffset = double.NaN;
+            st.LockPulseDirection = OffsetDirection.None;
         }
 
         private ChannelState? GetStateOrNull(int channel)
@@ -138,8 +177,7 @@ namespace ThermoBathCalibrator.Controller
             Func<int, double, string, bool> tryWriteOffset,
             Action<string>? traceLog = null)
         {
-            // 1) 입력 유효성
-            if (!readOk || double.IsNaN(ut) || double.IsNaN(err))
+            if (!readOk || double.IsNaN(ut) || double.IsNaN(currentOffset) || double.IsNaN(targetTemperature))
                 return currentOffset;
 
             ChannelState? st = GetStateOrNull(channel);
@@ -149,15 +187,11 @@ namespace ThermoBathCalibrator.Controller
                 return currentOffset;
             }
 
-            // 2) 최초 진입시 내부 offset 동기화
-            EnsureLocalOffsetInitialized(st, currentOffset);
+            EnsureLocalStateInitialized(st, currentOffset);
 
-            int currentTempMilli = ToMilli(ut);
-            int targetTempMilli = ToMilli(targetTemperature);
+            AddTemperatureSample(st, now, ut);
 
-            // 3) offset mismatch resend
-            // 내부가 믿는 offset과 장비에서 읽힌 offset이 다르면 내부값으로 재전송해 동기화 시도
-            if (!AreSameOffset(st.CurrentBathOffset, currentOffset, _cfg.OffsetStep))
+            if (!AreSameOffset(st.CurrentBathOffset, currentOffset, OFFSET_MATCH_EPS))
             {
                 bool resent = TryWriteAndConfirm(
                     channel,
@@ -170,370 +204,642 @@ namespace ThermoBathCalibrator.Controller
                 return resent ? st.CurrentBathOffset : currentOffset;
             }
 
-            // 4) Follow-up correction(사후 보정)
-            // 목표를 통과한 뒤(오버슈트/언더슈트) ±0.01°C 이상 벗어나면 1번만 보정
-            if (st.PrevAction == TempDirection.Up && currentTempMilli > targetTempMilli + FOLLOW_UP_THRESHOLD_MILLI)
+            double localErr = targetTemperature - ut;
+            double absErr = Math.Abs(localErr);
+
+            double slope10 = ComputeSlopeCPerMin(st, now, SLOPE_FAST_WINDOW_SEC);
+            double slope30 = ComputeSlopeCPerMin(st, now, SLOPE_MAIN_WINDOW_SEC);
+            double improvement90 = ComputeImprovement(st, now, targetTemperature, IMPROVEMENT_WINDOW_SEC);
+
+            Region region = GetRegion(absErr);
+
+            traceLog?.Invoke(
+                $"AUTO CH{channel} region={region} ut={ut:F3} target={targetTemperature:F3} " +
+                $"err={localErr:F3} absErr={absErr:F3} slope10={FormatDouble(slope10)} slope30={FormatDouble(slope30)} " +
+                $"impr90={FormatDouble(improvement90)} offset={currentOffset:F3}");
+
+            // =====================================================
+            // 1. lock pulse 진행 중이면 일반 제어보다 우선 처리
+            // =====================================================
+            if (st.LockPulseActive)
             {
-                // Up 상태에서 목표 위로 벗어남 -> 냉각 성격 보정( offset +step )
-                double next = QuantizeClamp(currentOffset + _cfg.OffsetStep);
-                st.PrevAction = TempDirection.Init;
+                double pulseErr = targetTemperature - ut;
+                double pulseAbsErr = Math.Abs(pulseErr);
 
-                bool ok = TryWriteAndConfirm(channel, st, next, "AUTO_UP_OVERSHOOT", tryWriteOffset, traceLog);
-                return ok ? next : currentOffset;
-            }
+                bool shouldAbort =
+                    pulseAbsErr > LOCK_PULSE_ABORT_ERR ||
+                    Math.Sign(pulseErr) != GetDirectionSign(st.LockPulseDirection);
 
-            if (st.PrevAction == TempDirection.Down && currentTempMilli < targetTempMilli - FOLLOW_UP_THRESHOLD_MILLI)
-            {
-                // Down 상태에서 목표 아래로 벗어남 -> 가열 성격 보정( offset -step )
-                double next = QuantizeClamp(currentOffset - _cfg.OffsetStep);
-                st.PrevAction = TempDirection.Init;
-
-                bool ok = TryWriteAndConfirm(channel, st, next, "AUTO_DOWN_OVERSHOOT", tryWriteOffset, traceLog);
-                return ok ? next : currentOffset;
-            }
-
-            // 5) prev temp 초기화(첫 tick은 slope 계산 불가)
-            if (!st.PrevTempMilli.HasValue)
-            {
-                st.PrevTempMilli = currentTempMilli;
-                return currentOffset;
-            }
-
-            // slope(1초당 온도 변화, m°C)
-            int slopeMilli = currentTempMilli - st.PrevTempMilli.Value;
-
-            // error 정의(현재 - 목표). 현재가 목표보다 높으면 +
-            int errorMilli = currentTempMilli - targetTempMilli;
-
-            // prev 갱신
-            st.PrevTempMilli = currentTempMilli;
-
-            // =========================================
-            // (A) Fast converge (|err| >= 0.10°C)
-            // =========================================
-            if (Math.Abs(errorMilli) >= FAST_BAND_MILLI)
-            {
-                return FastConvergeWhenFar(
-                    channel,
-                    now,
-                    st,
-                    currentTempMilli,
-                    targetTempMilli,
-                    currentOffset,
-                    tryWriteOffset,
-                    traceLog);
-            }
-            else
-            {
-                // far episode 종료 -> fast 상태 리셋
-                st.FastBurstWrites = 0;
-                st.LastFastActionAt = DateTime.MinValue;
-            }
-
-            // =========================================
-            // (B) Deadband(±0.02°C): 안정성 최우선 -> 기본적으로 손대지 않음
-            // =========================================
-            if (Math.Abs(errorMilli) <= DEADBAND_MILLI)
-            {
-                st.PrevAction = TempDirection.Init;
-                return currentOffset;
-            }
-
-            // =========================================
-            // (C) Predictive Brake: 목표 근처에서 "곧 통과"하면 미리 감속
-            // =========================================
-            if (ShouldApplyPredictiveBrake(now, st, errorMilli, slopeMilli))
-            {
-                // 단순 선형 예측(15초 뒤)
-                int predictedMilli = currentTempMilli + (slopeMilli * PB_HORIZON_SEC);
-
-                // 현재는 목표보다 낮음(error<0), 상승 중(slope>0), 예측상 목표를 넘어갈 것 같으면 -> 냉각 브레이크( +step )
-                if (errorMilli < 0 && slopeMilli > 0 && predictedMilli >= targetTempMilli + DEADBAND_MILLI)
+                if (shouldAbort)
                 {
-                    double next = QuantizeClamp(currentOffset + _cfg.OffsetStep);
+                    bool reverted = TryReturnFromLockPulse(
+                        channel,
+                        now,
+                        st,
+                        currentOffset,
+                        "AUTO_LOCK_PULSE_ABORT_RETURN",
+                        tryWriteOffset,
+                        traceLog);
 
-                    if (!AreSameOffset(next, currentOffset, _cfg.OffsetStep))
+                    return reverted ? st.LockPulseBaseOffset : currentOffset;
+                }
+
+                if ((now - st.LockPulseStartedAt).TotalSeconds >= LOCK_PULSE_HOLD_SEC)
+                {
+                    bool reverted = TryReturnFromLockPulse(
+                        channel,
+                        now,
+                        st,
+                        currentOffset,
+                        "AUTO_LOCK_PULSE_END_RETURN",
+                        tryWriteOffset,
+                        traceLog);
+
+                    return reverted ? st.LockPulseBaseOffset : currentOffset;
+                }
+
+                traceLog?.Invoke($"AUTO CH{channel} lock pulse holding dir={st.LockPulseDirection} base={st.LockPulseBaseOffset:F3}");
+                return currentOffset;
+            }
+
+            // =====================================================
+            // 2. Lock 구간
+            // =====================================================
+            if (region == Region.Lock)
+            {
+                HandleLockBiasTracking(now, st, localErr, slope30);
+
+                // Lock 구간 과속이면 즉시 반대 방향 감속 허용
+                if (CanApplyBrakeInLock(localErr, slope30))
+                {
+                    OffsetDirection brakeDir = GetBrakeDirection(localErr);
+                    if (CanBrakeWrite(now, st, Region.Lock))
                     {
-                        bool ok = TryWriteAndConfirm(channel, st, next, "AUTO_PREDICTIVE_BRAKE_COOL", tryWriteOffset, traceLog);
+                        double next = ApplyDirectionToOffset(currentOffset, brakeDir);
+                        if (!AreSameOffset(next, currentOffset, OFFSET_MATCH_EPS))
+                        {
+                            bool ok = TryWriteAndConfirm(
+                                channel,
+                                st,
+                                next,
+                                "AUTO_LOCK_BRAKE",
+                                tryWriteOffset,
+                                traceLog);
+
+                            if (ok)
+                            {
+                                st.LastBrakeWriteAt = now;
+                                st.LastWriteDirection = brakeDir;
+                                st.ConsecutiveSameDirectionWrites = 0;
+                                return next;
+                            }
+                        }
+                    }
+                }
+
+                if (ShouldStartLockPulse(now, st, localErr, slope30))
+                {
+                    OffsetDirection pulseDir = GetTowardTargetDirection(localErr);
+                    double baseOffset = currentOffset;
+                    double pulseOffset = ApplyDirectionToOffset(baseOffset, pulseDir);
+
+                    if (!AreSameOffset(pulseOffset, baseOffset, OFFSET_MATCH_EPS))
+                    {
+                        bool ok = TryWriteAndConfirm(
+                            channel,
+                            st,
+                            pulseOffset,
+                            "AUTO_LOCK_PULSE_START",
+                            tryWriteOffset,
+                            traceLog);
+
                         if (ok)
                         {
-                            st.LastPredictiveBrakeAt = now;
-                            st.LastActionAt = now;      // 일반 모드도 잠깐 쉬게 해서 연타 방지
-                            st.PrevAction = TempDirection.Down;
+                            st.LockPulseActive = true;
+                            st.LockPulseStartedAt = now;
+                            st.LockPulseBaseOffset = baseOffset;
+                            st.LockPulseDirection = pulseDir;
+                            st.LastWriteDirection = pulseDir;
+                            st.ConsecutiveSameDirectionWrites = 0;
+
+                            traceLog?.Invoke(
+                                $"AUTO CH{channel} lock pulse start dir={pulseDir} base={baseOffset:F3} pulse={pulseOffset:F3}");
+
+                            return pulseOffset;
+                        }
+                    }
+                }
+
+                return currentOffset;
+            }
+
+            // Lock이 아니면 pulse bias 추적 상태는 해제
+            st.LockFlatBiasSince = null;
+            st.LockBiasSign = 0;
+
+            // =====================================================
+            // 3. Near / Approach / Far 구간
+            // =====================================================
+            double signedTowardSlope = GetSignedTowardTargetSlope(localErr, slope30);
+            double slopeMin = GetSlopeMin(region);
+            double slopeMax = GetSlopeMax(region);
+
+            bool improvingEnough = !double.IsNaN(improvement90) && improvement90 >= MIN_IMPROVEMENT_IN_WINDOW;
+            bool inTowardBand =
+                !double.IsNaN(signedTowardSlope) &&
+                signedTowardSlope >= slopeMin &&
+                signedTowardSlope <= slopeMax;
+
+            bool overspeed =
+                !double.IsNaN(signedTowardSlope) &&
+                signedTowardSlope > (slopeMax + SLOPE_OVERSPEED_MARGIN);
+
+            bool insufficientToward =
+                double.IsNaN(signedTowardSlope) ||
+                signedTowardSlope < slopeMin;
+
+            traceLog?.Invoke(
+                $"AUTO CH{channel} region={region} towardSlope={FormatDouble(signedTowardSlope)} " +
+                $"band=[{slopeMin:F3},{slopeMax:F3}] improvingEnough={improvingEnough}");
+
+            // 3-1. 과속이면 반대 방향 감속
+            if (overspeed)
+            {
+                OffsetDirection brakeDir = GetBrakeDirection(localErr);
+
+                if (CanBrakeWrite(now, st, region))
+                {
+                    double next = ApplyDirectionToOffset(currentOffset, brakeDir);
+
+                    if (!AreSameOffset(next, currentOffset, OFFSET_MATCH_EPS))
+                    {
+                        bool ok = TryWriteAndConfirm(
+                            channel,
+                            st,
+                            next,
+                            $"AUTO_{region}_BRAKE",
+                            tryWriteOffset,
+                            traceLog);
+
+                        if (ok)
+                        {
+                            st.LastBrakeWriteAt = now;
+                            st.LastWriteDirection = brakeDir;
+                            st.ConsecutiveSameDirectionWrites = 0;
                             return next;
                         }
                     }
                 }
 
-                // 현재는 목표보다 높음(error>0), 하강 중(slope<0), 예측상 목표 아래로 내려갈 것 같으면 -> 가열 브레이크( -step )
-                if (errorMilli > 0 && slopeMilli < 0 && predictedMilli <= targetTempMilli - DEADBAND_MILLI)
-                {
-                    double next = QuantizeClamp(currentOffset - _cfg.OffsetStep);
-
-                    if (!AreSameOffset(next, currentOffset, _cfg.OffsetStep))
-                    {
-                        bool ok = TryWriteAndConfirm(channel, st, next, "AUTO_PREDICTIVE_BRAKE_HEAT", tryWriteOffset, traceLog);
-                        if (ok)
-                        {
-                            st.LastPredictiveBrakeAt = now;
-                            st.LastActionAt = now;
-                            st.PrevAction = TempDirection.Up;
-                            return next;
-                        }
-                    }
-                }
-            }
-
-            // =========================================
-            // (D) Near Pulse: 목표 근처 파동을 25.000쪽으로 더 붙이는 "한 번" 보정
-            // =========================================
-            // - deadband 밖(>0.02)인데 0.04 이내일 때만
-            // - 기울기 방향상 곧 목표를 더 지나치거나 멀어질 것 같으면 0.1step 1회
-            // - 연타 방지 쿨다운
-            if (ShouldApplyNearPulse(now, st, errorMilli, slopeMilli))
-            {
-                // 조건 1) 목표보다 낮은데(error<0) 계속 올라가고(slope>0) 있어 "곧 통과" 또는 "파동이 커질" 기미
-                // -> 약한 냉각(+step)로 파동 중심을 목표 근처로 당김
-                if (errorMilli < 0 && slopeMilli > 0)
-                {
-                    double next = QuantizeClamp(currentOffset + _cfg.OffsetStep);
-                    if (!AreSameOffset(next, currentOffset, _cfg.OffsetStep))
-                    {
-                        bool ok = TryWriteAndConfirm(channel, st, next, "AUTO_NEAR_PULSE_COOL", tryWriteOffset, traceLog);
-                        if (ok)
-                        {
-                            st.LastNearPulseAt = now;
-                            st.LastActionAt = now;      // 연속 write 방지
-                            st.PrevAction = TempDirection.Down;
-                            return next;
-                        }
-                    }
-                }
-
-                // 조건 2) 목표보다 높은데(error>0) 계속 내려가고(slope<0) 있어 "곧 아래로 과하게 내려갈" 기미
-                // -> 약한 가열(-step)로 파동 중심을 목표 근처로 당김
-                if (errorMilli > 0 && slopeMilli < 0)
-                {
-                    double next = QuantizeClamp(currentOffset - _cfg.OffsetStep);
-                    if (!AreSameOffset(next, currentOffset, _cfg.OffsetStep))
-                    {
-                        bool ok = TryWriteAndConfirm(channel, st, next, "AUTO_NEAR_PULSE_HEAT", tryWriteOffset, traceLog);
-                        if (ok)
-                        {
-                            st.LastNearPulseAt = now;
-                            st.LastActionAt = now;
-                            st.PrevAction = TempDirection.Up;
-                            return next;
-                        }
-                    }
-                }
-            }
-
-            // =========================================
-            // (E) 일반 모드 최소 간격(너무 자주 쓰지 않기)
-            // =========================================
-            if (st.LastActionAt != DateTime.MinValue &&
-                (now - st.LastActionAt).TotalMilliseconds < MIN_ACTION_INTERVAL_MS)
-            {
                 return currentOffset;
             }
 
-            // =========================================
-            // (F) 일반 모드 제어(기존 핵심 로직 유지)
-            // =========================================
-            bool isAction = false;
-            double targetOffset = currentOffset;
-
-            // Too hot (현재가 목표보다 높음: error>0) -> 냉각: offset +step
-            if (errorMilli > DEADBAND_MILLI)
-            {
-                st.LastActionAt = now;
-
-                // 이미 충분히 내려가는 중이면(음수 slope가 충분히 큼) 기다림
-                // slopeMilli > -threshold 이면 "내려가는 속도가 충분하지 않다" -> 냉각 offset 적용
-                if (slopeMilli > -SLOPE_THRESHOLD_MILLI)
-                {
-                    targetOffset = QuantizeClamp(currentOffset + _cfg.OffsetStep);
-                    st.PrevAction = TempDirection.Down;
-                    isAction = !AreSameOffset(targetOffset, currentOffset, _cfg.OffsetStep);
-                }
-            }
-            // Too cold (현재가 목표보다 낮음: error<0) -> 가열: offset -step
-            else if (errorMilli < -DEADBAND_MILLI)
-            {
-                st.LastActionAt = now;
-
-                // 이미 충분히 올라가는 중이면(양수 slope가 충분히 큼) 기다림
-                // slopeMilli < threshold 이면 "올라가는 속도가 충분하지 않다" -> 가열 offset 적용
-                if (slopeMilli < SLOPE_THRESHOLD_MILLI)
-                {
-                    targetOffset = QuantizeClamp(currentOffset - _cfg.OffsetStep);
-                    st.PrevAction = TempDirection.Up;
-                    isAction = !AreSameOffset(targetOffset, currentOffset, _cfg.OffsetStep);
-                }
-            }
-
-            if (!isAction)
+            // 3-2. 목표 방향으로 충분히 움직이고 있고 개선도도 좋으면 유지
+            if (inTowardBand && improvingEnough)
                 return currentOffset;
 
-            bool writeOk = TryWriteAndConfirm(channel, st, targetOffset, "AUTO_SMART_CTRL", tryWriteOffset, traceLog);
-            return writeOk ? targetOffset : currentOffset;
+            // 3-3. Near 구간은 같은 방향 추가를 아주 제한적으로만 허용
+            if (region == Region.Near)
+            {
+                if (insufficientToward &&
+                    CanSameDirectionWrite(now, st, region) &&
+                    st.ConsecutiveSameDirectionWrites < GetMaxSameDirectionWrites(region))
+                {
+                    OffsetDirection towardDir = GetTowardTargetDirection(localErr);
+                    double next = ApplyDirectionToOffset(currentOffset, towardDir);
+
+                    if (!AreSameOffset(next, currentOffset, OFFSET_MATCH_EPS))
+                    {
+                        bool ok = TryWriteAndConfirm(
+                            channel,
+                            st,
+                            next,
+                            "AUTO_NEAR_PUSH",
+                            tryWriteOffset,
+                            traceLog);
+
+                        if (ok)
+                        {
+                            UpdateSameDirectionWriteState(now, st, towardDir);
+                            return next;
+                        }
+                    }
+                }
+
+                return currentOffset;
+            }
+
+            // 3-4. Approach / Far 구간
+            if (insufficientToward)
+            {
+                OffsetDirection towardDir = GetTowardTargetDirection(localErr);
+
+                if (CanSameDirectionWrite(now, st, region) &&
+                    st.ConsecutiveSameDirectionWrites < GetMaxSameDirectionWrites(region))
+                {
+                    double next = ApplyDirectionToOffset(currentOffset, towardDir);
+
+                    if (!AreSameOffset(next, currentOffset, OFFSET_MATCH_EPS))
+                    {
+                        bool ok = TryWriteAndConfirm(
+                            channel,
+                            st,
+                            next,
+                            $"AUTO_{region}_PUSH",
+                            tryWriteOffset,
+                            traceLog);
+
+                        if (ok)
+                        {
+                            UpdateSameDirectionWriteState(now, st, towardDir);
+                            return next;
+                        }
+                    }
+                }
+            }
+
+            return currentOffset;
         }
 
         // =========================================================
-        // Predictive Brake 조건
+        // LOCK PULSE
         // =========================================================
-        private static bool ShouldApplyPredictiveBrake(
+
+        private static void HandleLockBiasTracking(
             DateTime now,
             ChannelState st,
-            int errorMilli,
-            int slopeMilli)
+            double err,
+            double slope30)
         {
-            // 목표 근처에서만
-            if (Math.Abs(errorMilli) > PB_ARM_ERR_MILLI)
+            int sign = Math.Sign(err);
+            bool flatEnough = !double.IsNaN(slope30) && Math.Abs(slope30) <= LOCK_PULSE_FLAT_SLOPE_MAX;
+            bool biasedEnough = Math.Abs(err) >= LOCK_PULSE_BIAS_MIN && Math.Abs(err) <= LOCK_ERR_MAX;
+
+            if (sign == 0 || !flatEnough || !biasedEnough)
+            {
+                st.LockFlatBiasSince = null;
+                st.LockBiasSign = 0;
+                return;
+            }
+
+            if (!st.LockFlatBiasSince.HasValue || st.LockBiasSign != sign)
+            {
+                st.LockFlatBiasSince = now;
+                st.LockBiasSign = sign;
+            }
+        }
+
+        private static bool ShouldStartLockPulse(
+            DateTime now,
+            ChannelState st,
+            double err,
+            double slope30)
+        {
+            if (Math.Abs(err) > LOCK_ERR_MAX)
                 return false;
 
-            // slope가 너무 작으면 노이즈
-            if (Math.Abs(slopeMilli) < PB_MIN_SLOPE_MILLI)
+            if (Math.Abs(err) < LOCK_PULSE_BIAS_MIN)
                 return false;
 
-            // deadband는 위에서 이미 return 되지만 안전장치로 방어
-            if (Math.Abs(errorMilli) <= DEADBAND_MILLI)
+            if (double.IsNaN(slope30) || Math.Abs(slope30) > LOCK_PULSE_FLAT_SLOPE_MAX)
                 return false;
 
-            // 쿨다운
-            if (st.LastPredictiveBrakeAt != DateTime.MinValue &&
-                (now - st.LastPredictiveBrakeAt).TotalMilliseconds < PB_COOLDOWN_MS)
+            if (!st.LockFlatBiasSince.HasValue)
+                return false;
+
+            if ((now - st.LockFlatBiasSince.Value).TotalSeconds < LOCK_PULSE_STABLE_SEC)
+                return false;
+
+            if (st.LockPulseLastEndedAt != DateTime.MinValue &&
+                (now - st.LockPulseLastEndedAt).TotalSeconds < LOCK_PULSE_COOLDOWN_SEC)
                 return false;
 
             return true;
         }
 
-        // =========================================================
-        // Near Pulse 조건
-        // =========================================================
-        private static bool ShouldApplyNearPulse(
-            DateTime now,
-            ChannelState st,
-            int errorMilli,
-            int slopeMilli)
-        {
-            int absErr = Math.Abs(errorMilli);
-
-            // deadband 밖이지만 목표 근처에서만
-            if (absErr <= NP_MIN_ERR_MILLI)   // <= 0.02면 deadband 취급
-                return false;
-
-            if (absErr > NP_ARM_ERR_MILLI)    // > 0.04면 의미 없음(오히려 일반/브레이크가 처리)
-                return false;
-
-            // slope가 너무 작으면 노이즈
-            if (Math.Abs(slopeMilli) < NP_MIN_SLOPE_MILLI)
-                return false;
-
-            // 쿨다운: 근처에서 0.1 step을 연타하면 파동이 커짐
-            if (st.LastNearPulseAt != DateTime.MinValue &&
-                (now - st.LastNearPulseAt).TotalMilliseconds < NP_COOLDOWN_MS)
-                return false;
-
-            return true;
-        }
-
-        // =========================================================
-        // Fast converge (멀리 있을 때)
-        // =========================================================
-        private double FastConvergeWhenFar(
+        private bool TryReturnFromLockPulse(
             int channel,
             DateTime now,
             ChannelState st,
-            int currentTempMilli,
-            int targetTempMilli,
             double currentOffset,
+            string reason,
             Func<int, double, string, bool> tryWriteOffset,
             Action<string>? traceLog)
         {
-            // fast에서는 slope 갱신이 의미 있어야 하므로 계속 업데이트
-            int slopeMilli = currentTempMilli - st.PrevTempMilli!.Value;
-            int errorMilli = currentTempMilli - targetTempMilli;
-
-            st.PrevTempMilli = currentTempMilli;
-
-            // 안전 상한
-            if (st.FastBurstWrites >= FAST_MAX_BURST_WRITES)
+            if (double.IsNaN(st.LockPulseBaseOffset))
             {
-                traceLog?.Invoke($"AUTO FAST CH{channel} burst cap reached -> hold (writes={st.FastBurstWrites})");
-                return currentOffset;
+                st.LockPulseActive = false;
+                st.LockPulseDirection = OffsetDirection.None;
+                st.LockPulseStartedAt = DateTime.MinValue;
+                st.LockPulseLastEndedAt = now;
+                return false;
             }
 
-            // 최소 간격
-            if (st.LastFastActionAt != DateTime.MinValue &&
-                (now - st.LastFastActionAt).TotalMilliseconds < FAST_MIN_ACTION_INTERVAL_MS)
+            double baseOffset = QuantizeClamp(st.LockPulseBaseOffset);
+
+            if (AreSameOffset(baseOffset, currentOffset, OFFSET_MATCH_EPS))
             {
-                return currentOffset;
+                st.CurrentBathOffset = baseOffset;
+                st.LockPulseActive = false;
+                st.LockPulseDirection = OffsetDirection.None;
+                st.LockPulseStartedAt = DateTime.MinValue;
+                st.LockPulseLastEndedAt = now;
+                return true;
             }
 
-            double targetOffset = currentOffset;
-            bool wantWrite = false;
-
-            // Too hot -> cool: offset +step
-            if (errorMilli > FAST_BAND_MILLI)
-            {
-                // 이미 충분히 내려가는 중이면 스킵
-                if (slopeMilli > -FAST_SLOPE_OK_MILLI)
-                {
-                    targetOffset = QuantizeClamp(currentOffset + _cfg.OffsetStep);
-                    wantWrite = !AreSameOffset(targetOffset, currentOffset, _cfg.OffsetStep);
-                    st.PrevAction = TempDirection.Down;
-                }
-            }
-            // Too cold -> heat: offset -step
-            else if (errorMilli < -FAST_BAND_MILLI)
-            {
-                // 이미 충분히 올라가는 중이면 스킵
-                if (slopeMilli < FAST_SLOPE_OK_MILLI)
-                {
-                    targetOffset = QuantizeClamp(currentOffset - _cfg.OffsetStep);
-                    wantWrite = !AreSameOffset(targetOffset, currentOffset, _cfg.OffsetStep);
-                    st.PrevAction = TempDirection.Up;
-                }
-            }
-
-            if (!wantWrite)
-                return currentOffset;
-
-            bool ok = TryWriteAndConfirm(channel, st, targetOffset, "AUTO_FAST_FAR_CONVERGE", tryWriteOffset, traceLog);
+            bool ok = TryWriteAndConfirm(channel, st, baseOffset, reason, tryWriteOffset, traceLog);
 
             if (ok)
             {
-                st.LastFastActionAt = now;
-                st.FastBurstWrites++;
-
-                // fast에서 write했으면 일반 모드도 잠깐 쉬게(헌팅 방지)
-                st.LastActionAt = now;
+                st.LockPulseActive = false;
+                st.LockPulseDirection = OffsetDirection.None;
+                st.LockPulseStartedAt = DateTime.MinValue;
+                st.LockPulseLastEndedAt = now;
+                st.LastWriteDirection = OffsetDirection.None;
+                st.ConsecutiveSameDirectionWrites = 0;
             }
 
-            return ok ? targetOffset : currentOffset;
+            return ok;
         }
 
         // =========================================================
-        // 초기화/쓰기/유틸
+        // REGION / DECISION
         // =========================================================
-        private void EnsureLocalOffsetInitialized(ChannelState st, double currentOffset)
+
+        private static Region GetRegion(double absErr)
+        {
+            if (absErr < LOCK_ERR_MAX) return Region.Lock;
+            if (absErr < NEAR_ERR_MAX) return Region.Near;
+            if (absErr < APPROACH_ERR_MAX) return Region.Approach;
+            return Region.Far;
+        }
+
+        private static double GetSlopeMin(Region region)
+        {
+            switch (region)
+            {
+                case Region.Far:
+                    return FAR_SLOPE_MIN;
+                case Region.Approach:
+                    return APPROACH_SLOPE_MIN;
+                case Region.Near:
+                    return NEAR_SLOPE_MIN;
+                default:
+                    return 0.0;
+            }
+        }
+
+        private static double GetSlopeMax(Region region)
+        {
+            switch (region)
+            {
+                case Region.Far:
+                    return FAR_SLOPE_MAX;
+                case Region.Approach:
+                    return APPROACH_SLOPE_MAX;
+                case Region.Near:
+                    return NEAR_SLOPE_MAX;
+                default:
+                    return LOCK_SLOPE_MAX;
+            }
+        }
+
+        private static int GetSameDirectionIntervalSec(Region region)
+        {
+            switch (region)
+            {
+                case Region.Far:
+                    return FAR_SAME_DIR_INTERVAL_SEC;
+                case Region.Approach:
+                    return APPROACH_SAME_DIR_INTERVAL_SEC;
+                case Region.Near:
+                    return NEAR_SAME_DIR_INTERVAL_SEC;
+                default:
+                    return int.MaxValue;
+            }
+        }
+
+        private static int GetBrakeIntervalSec(Region region)
+        {
+            switch (region)
+            {
+                case Region.Far:
+                    return FAR_BRAKE_INTERVAL_SEC;
+                case Region.Approach:
+                    return APPROACH_BRAKE_INTERVAL_SEC;
+                case Region.Near:
+                    return NEAR_BRAKE_INTERVAL_SEC;
+                default:
+                    return LOCK_BRAKE_INTERVAL_SEC;
+            }
+        }
+
+        private static int GetMaxSameDirectionWrites(Region region)
+        {
+            switch (region)
+            {
+                case Region.Far:
+                    return FAR_MAX_SAME_DIR_WRITES;
+                case Region.Approach:
+                    return APPROACH_MAX_SAME_DIR_WRITES;
+                case Region.Near:
+                    return NEAR_MAX_SAME_DIR_WRITES;
+                default:
+                    return 0;
+            }
+        }
+
+        private static bool CanSameDirectionWrite(DateTime now, ChannelState st, Region region)
+        {
+            if (st.LastSameDirectionWriteAt == DateTime.MinValue)
+                return true;
+
+            return (now - st.LastSameDirectionWriteAt).TotalSeconds >= GetSameDirectionIntervalSec(region);
+        }
+
+        private static bool CanBrakeWrite(DateTime now, ChannelState st, Region region)
+        {
+            if (st.LastBrakeWriteAt == DateTime.MinValue)
+                return true;
+
+            return (now - st.LastBrakeWriteAt).TotalSeconds >= GetBrakeIntervalSec(region);
+        }
+
+        private static bool CanApplyBrakeInLock(double err, double slope30)
+        {
+            if (double.IsNaN(slope30))
+                return false;
+
+            if (err > 0.0)
+            {
+                // 목표보다 낮은데 너무 빨리 올라가면 감속 필요
+                return slope30 > (LOCK_SLOPE_MAX + SLOPE_OVERSPEED_MARGIN);
+            }
+
+            if (err < 0.0)
+            {
+                // 목표보다 높은데 너무 빨리 내려가면 감속 필요
+                return slope30 < -(LOCK_SLOPE_MAX + SLOPE_OVERSPEED_MARGIN);
+            }
+
+            return false;
+        }
+
+        private static OffsetDirection GetTowardTargetDirection(double err)
+        {
+            if (err > 0.0)
+                return OffsetDirection.Heat;
+
+            if (err < 0.0)
+                return OffsetDirection.Cool;
+
+            return OffsetDirection.None;
+        }
+
+        private static OffsetDirection GetBrakeDirection(double err)
+        {
+            if (err > 0.0)
+                return OffsetDirection.Cool;
+
+            if (err < 0.0)
+                return OffsetDirection.Heat;
+
+            return OffsetDirection.None;
+        }
+
+        private static int GetDirectionSign(OffsetDirection dir)
+        {
+            switch (dir)
+            {
+                case OffsetDirection.Heat:
+                    return 1;  // 온도를 올리는 방향
+                case OffsetDirection.Cool:
+                    return -1; // 온도를 내리는 방향
+                default:
+                    return 0;
+            }
+        }
+
+        private static double GetSignedTowardTargetSlope(double err, double slopeCPerMin)
+        {
+            if (double.IsNaN(slopeCPerMin) || err == 0.0)
+                return double.NaN;
+
+            return slopeCPerMin * Math.Sign(err);
+        }
+
+        private void UpdateSameDirectionWriteState(DateTime now, ChannelState st, OffsetDirection dir)
+        {
+            if (st.LastWriteDirection == dir)
+            {
+                st.ConsecutiveSameDirectionWrites++;
+            }
+            else
+            {
+                st.ConsecutiveSameDirectionWrites = 1;
+            }
+
+            st.LastWriteDirection = dir;
+            st.LastSameDirectionWriteAt = now;
+        }
+
+        // =========================================================
+        // HISTORY / SLOPE / IMPROVEMENT
+        // =========================================================
+
+        private static void AddTemperatureSample(ChannelState st, DateTime now, double temp)
+        {
+            st.TempHistory.Add(new TempSample
+            {
+                At = now,
+                Temp = temp
+            });
+
+            DateTime minKeep = now.AddSeconds(-HISTORY_KEEP_SEC);
+
+            while (st.TempHistory.Count > 0 && st.TempHistory[0].At < minKeep)
+                st.TempHistory.RemoveAt(0);
+        }
+
+        private static double ComputeSlopeCPerMin(ChannelState st, DateTime now, int windowSec)
+        {
+            if (st.TempHistory.Count < 2)
+                return double.NaN;
+
+            DateTime targetAt = now.AddSeconds(-windowSec);
+
+            TempSample? refSample = null;
+            for (int i = st.TempHistory.Count - 1; i >= 0; i--)
+            {
+                if (st.TempHistory[i].At <= targetAt)
+                {
+                    refSample = st.TempHistory[i];
+                    break;
+                }
+            }
+
+            if (refSample == null)
+                return double.NaN;
+
+            TempSample last = st.TempHistory[st.TempHistory.Count - 1];
+            double dtMin = (last.At - refSample.At).TotalMinutes;
+
+            if (dtMin <= 0.0)
+                return double.NaN;
+
+            return (last.Temp - refSample.Temp) / dtMin;
+        }
+
+        private static double ComputeImprovement(ChannelState st, DateTime now, double targetTemperature, int windowSec)
+        {
+            if (st.TempHistory.Count < 2)
+                return double.NaN;
+
+            DateTime targetAt = now.AddSeconds(-windowSec);
+
+            TempSample? refSample = null;
+            for (int i = st.TempHistory.Count - 1; i >= 0; i--)
+            {
+                if (st.TempHistory[i].At <= targetAt)
+                {
+                    refSample = st.TempHistory[i];
+                    break;
+                }
+            }
+
+            if (refSample == null)
+                return double.NaN;
+
+            TempSample last = st.TempHistory[st.TempHistory.Count - 1];
+
+            double prevAbsErr = Math.Abs(targetTemperature - refSample.Temp);
+            double nowAbsErr = Math.Abs(targetTemperature - last.Temp);
+
+            return prevAbsErr - nowAbsErr;
+        }
+
+        // =========================================================
+        // OFFSET WRITE / UTIL
+        // =========================================================
+
+        private void EnsureLocalStateInitialized(ChannelState st, double currentOffset)
         {
             if (!double.IsNaN(st.CurrentBathOffset))
                 return;
 
             st.CurrentBathOffset = currentOffset;
-            st.PrevTempMilli = null;
-            st.PrevAction = TempDirection.Init;
-
-            st.LastActionAt = DateTime.MinValue;
-
-            st.LastFastActionAt = DateTime.MinValue;
-            st.FastBurstWrites = 0;
-
-            st.LastPredictiveBrakeAt = DateTime.MinValue;
-            st.LastNearPulseAt = DateTime.MinValue;
+            st.TempHistory.Clear();
+            st.LastSameDirectionWriteAt = DateTime.MinValue;
+            st.LastBrakeWriteAt = DateTime.MinValue;
+            st.LastWriteDirection = OffsetDirection.None;
+            st.ConsecutiveSameDirectionWrites = 0;
+            st.LockFlatBiasSince = null;
+            st.LockBiasSign = 0;
+            st.LockPulseActive = false;
+            st.LockPulseStartedAt = DateTime.MinValue;
+            st.LockPulseLastEndedAt = DateTime.MinValue;
+            st.LockPulseBaseOffset = currentOffset;
+            st.LockPulseDirection = OffsetDirection.None;
         }
 
         private bool TryWriteAndConfirm(
@@ -559,23 +865,38 @@ namespace ThermoBathCalibrator.Controller
             return ok;
         }
 
+        private double ApplyDirectionToOffset(double currentOffset, OffsetDirection dir)
+        {
+            switch (dir)
+            {
+                case OffsetDirection.Heat:
+                    return QuantizeClamp(currentOffset - _cfg.OffsetStep);
+
+                case OffsetDirection.Cool:
+                    return QuantizeClamp(currentOffset + _cfg.OffsetStep);
+
+                default:
+                    return QuantizeClamp(currentOffset);
+            }
+        }
+
         private double QuantizeClamp(double offset)
         {
-            // 장비/프로그램 설정 범위로 clamp 후 step(0.1) 단위로 quantize
             double clamped = OffsetMath.Clamp(offset, _cfg.OffsetClampMin, _cfg.OffsetClampMax);
             return OffsetMath.Quantize(clamped, _cfg.OffsetStep);
         }
 
-        private static int ToMilli(double tempC)
+        private static bool AreSameOffset(double a, double b, double eps)
         {
-            return (int)Math.Round(tempC * 1000.0, MidpointRounding.AwayFromZero);
+            return Math.Abs(a - b) <= eps;
         }
 
-        // step의 절반(0.05) 정도를 허용오차로 사용(불필요한 mismatch resend 방지)
-        private static bool AreSameOffset(double a, double b, double offsetStep)
+        private static string FormatDouble(double v)
         {
-            double eps = Math.Max(1e-6, Math.Abs(offsetStep) * 0.5);
-            return Math.Abs(a - b) <= eps;
+            if (double.IsNaN(v) || double.IsInfinity(v))
+                return "NaN";
+
+            return v.ToString("F4");
         }
     }
 }
