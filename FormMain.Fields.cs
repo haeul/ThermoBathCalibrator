@@ -40,6 +40,10 @@ namespace ThermoBathCalibrator
         private bool _boardConnected;
         private int _boardFailCount;
 
+        // 통신 상태값(_boardConnected/_boardFailCount/_lastReconnectTick 등)을 여러 스레드에서
+        // 일관되게 갱신하기 위한 최소 범위 동기화 객체
+        private readonly object _commStateSync = new object();
+
         private MultiBoardModbusClient _mb = null!;
 
         private string _host = "192.168.0.41";
@@ -59,7 +63,15 @@ namespace ThermoBathCalibrator
 
         // 재연결 쿨다운
         private long _lastReconnectTick;
+        // 재연결을 완전 고정 800ms로 두면 연속 실패 시 재시도가 과밀해질 수 있어
+        // 실패 누적 횟수에 따라 단계적으로 대기시간을 늘린다.
         private const int ReconnectCooldownMs = 800;
+        private const int ReconnectBackoffStepMs = 400;
+        private const int ReconnectBackoffMaxMs = 5000;
+        private int _reconnectFailStreak;
+        // 실제 reconnect 수행은 한 번에 하나만 통과시키기 위한 게이트
+        private readonly System.Threading.SemaphoreSlim _reconnectGate = new System.Threading.SemaphoreSlim(1, 1);
+        private int _reconnectInProgress;
 
         // 에러 로그용
         private double _prevErr1 = double.NaN;
@@ -120,10 +132,19 @@ namespace ThermoBathCalibrator
         private const ushort RegCh2OffsetCur = 11;
 
         private const int AckTimeoutMs = 1500;
-        private const int AckPollIntervalMs = 100;
+        // readback 검증 자체는 유지하되, 혼잡 시 폴링 간격이 조금씩 늘어나도록 완화
+        private const int AckPollIntervalMs = 120;
+        private const int AckPollBackoffStepMs = 40;
+        private const int AckPollIntervalMaxMs = 280;
 
         // AUTO/MANUAL 동시 offset write 시퀀스(0->값->2->wait->0) 충돌 방지
         private readonly object _offsetWriteSequenceSync = new object();
+
+        // write burst 완화를 위해 채널별 최소 요청 간격을 둔다.
+        // 기능을 막지 않고, 너무 빠른 연속 호출만 짧게 지연시키는 용도이다.
+        private const int OffsetWriteMinIntervalMs = 120;
+        private DateTime _lastWriteRequestUtcCh1 = DateTime.MinValue;
+        private DateTime _lastWriteRequestUtcCh2 = DateTime.MinValue;
 
         // FIELD PATCH START
         private volatile bool _inWriteSequence;

@@ -90,15 +90,84 @@ namespace ThermoBathCalibrator
 
         private bool TryConnectWithCooldown()
         {
-            long now = Environment.TickCount64;
-            long elapsed = now - _lastReconnectTick;
-            if (elapsed < ReconnectCooldownMs)
-                return false;
-
-            _lastReconnectTick = now;
-            return _mb.TryConnect(out _);
+            return TryConnectWithCooldown("UNKNOWN");
         }
 
+        private bool TryConnectWithCooldown(string caller)
+        {
+            if (_mb.IsConnected)
+            {
+                SetBoardConnectionState(true, false);
+                return true;
+            }
+
+            // 여러 경로(UI/worker/설정창)에서 동시에 reconnect가 들어올 수 있으므로
+            // 실제 연결 시도 구간은 하나만 수행되도록 빠르게 중복 진입을 차단한다.
+            if (Interlocked.CompareExchange(ref _reconnectInProgress, 1, 0) != 0)
+            {
+                TraceModbus($"RECONNECT SKIP caller={caller} reason=already_in_progress");
+                return _mb.IsConnected;
+            }
+
+            try
+            {
+                if (!_reconnectGate.Wait(0))
+                {
+                    TraceModbus($"RECONNECT SKIP caller={caller} reason=gate_busy");
+                    return _mb.IsConnected;
+                }
+
+                try
+                {
+                    long now = Environment.TickCount64;
+                    int backoffMs;
+                    long elapsed;
+                    int failStreak;
+                    lock (_commStateSync)
+                    {
+                        failStreak = _reconnectFailStreak;
+                        backoffMs = CalculateReconnectBackoffMs(failStreak);
+                        elapsed = now - _lastReconnectTick;
+                    }
+
+                    if (elapsed < backoffMs)
+                    {
+                        TraceModbus($"RECONNECT SKIP caller={caller} reason=cooldown remainMs={backoffMs - elapsed} failStreak={failStreak} backoffMs={backoffMs}");
+                        return false;
+                    }
+
+                    lock (_commStateSync)
+                    {
+                        _lastReconnectTick = now;
+                        failStreak = _reconnectFailStreak;
+                        backoffMs = CalculateReconnectBackoffMs(failStreak);
+                    }
+
+                    int attemptNo = failStreak + 1;
+                    bool ok = _mb.TryConnect(out string err);
+                    if (ok)
+                    {
+                        lock (_commStateSync) _reconnectFailStreak = 0;
+                        SetBoardConnectionState(true, false);
+                        TraceModbus($"RECONNECT OK caller={caller} attempt={attemptNo} backoffMs={backoffMs}");
+                        return true;
+                    }
+
+                    lock (_commStateSync) _reconnectFailStreak++;
+                    SetBoardConnectionState(false, true);
+                    TraceModbus($"RECONNECT FAIL caller={caller} attempt={attemptNo} failStreak={_reconnectFailStreak} backoffMs={backoffMs} err={err}");
+                    return false;
+                }
+                finally
+                {
+                    _reconnectGate.Release();
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _reconnectInProgress, 0);
+            }
+        }
         private bool TryReadMultiBoard(out MultiBoardSnapshot snap, out bool stale)
         {
             snap = default;
@@ -114,24 +183,22 @@ namespace ThermoBathCalibrator
 
             if (!_mb.IsConnected)
             {
-                _boardConnected = TryConnectWithCooldown();
-                if (!_boardConnected) _boardFailCount++;
+                _ = TryConnectWithCooldown("worker");
             }
 
             if (!_mb.IsConnected)
             {
-                _boardConnected = false;
+                SetBoardConnectionState(false, false);
                 return false;
             }
 
             if (!_mb.TryReadHoldingRegisters(start: RegReadStart, count: RegReadCount, out ushort[] regs, out string err))
             {
-                _boardConnected = false;
-                _boardFailCount++;
+                SetBoardConnectionState(false, true);
                 return false;
             }
 
-            _boardConnected = true;
+            SetBoardConnectionState(true, false);
 
             MultiBoardSnapshot parsed = ParseSnapshot(regs);
 
@@ -257,30 +324,29 @@ namespace ThermoBathCalibrator
         private bool TryReadOffsetFromDevice(int channel, out double offset)
         {
             offset = double.NaN;
+            string caller = ResolveCallerTag($"READBACK_CH{channel}");
 
             if (!_mb.IsConnected)
             {
-                _boardConnected = TryConnectWithCooldown();
-                if (!_boardConnected) _boardFailCount++;
+                _ = TryConnectWithCooldown(caller);
             }
 
             if (!_mb.IsConnected)
             {
-                _boardConnected = false;
-                TraceModbus($"OFFSET READBACK FAIL ch={channel} reason=not_connected");
+                SetBoardConnectionState(false, false);
+                TraceModbus($"OFFSET READBACK FAIL src={caller} ch={channel} reason=not_connected");
                 return false;
             }
 
             ushort start = channel == 1 ? RegCh1OffsetCur : RegCh2OffsetCur;
             if (!_mb.TryReadHoldingRegisters(start, 1, out ushort[] regs, out string err))
             {
-                _boardConnected = false;
-                _boardFailCount++;
-                TraceModbus($"OFFSET READBACK FAIL ch={channel} reason=read_register err={err}");
+                SetBoardConnectionState(false, true);
+                TraceModbus($"OFFSET READBACK FAIL src={caller} ch={channel} reason=read_register err={err}");
                 return false;
             }
 
-            _boardConnected = true;
+            SetBoardConnectionState(true, false);
 
             if (regs == null || regs.Length < 1)
             {
@@ -290,7 +356,7 @@ namespace ThermoBathCalibrator
 
             short raw10 = unchecked((short)regs[0]);
             offset = raw10 / 10.0;
-            TraceModbus($"OFFSET READBACK OK ch={channel} read={offset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10}");
+            TraceModbus($"OFFSET READBACK OK src={caller} ch={channel} read={offset.ToString("0.0", CultureInfo.InvariantCulture)} raw10={raw10}");
             return true;
         }
 
@@ -328,15 +394,15 @@ namespace ThermoBathCalibrator
                 _inWriteSequence = true;
                 try
                 {
+                    string src = ResolveCallerTag(reason);
                     if (!_mb.IsConnected)
                     {
-                        _boardConnected = TryConnectWithCooldown();
-                        if (!_boardConnected) _boardFailCount++;
+                        _ = TryConnectWithCooldown(src);
                     }
 
                     if (!_mb.IsConnected)
                     {
-                        _boardConnected = false;
+                        SetBoardConnectionState(false, false);
                         TraceModbus($"[WRITE RESULT] FAIL reason=not_connected src={reason} channel={channel}");
                         ShowOffsetApplyStatus(channel: channel, offset: appliedOffset, success: false);
                         return false;
@@ -348,7 +414,7 @@ namespace ThermoBathCalibrator
                     ushort offsetWord = unchecked((ushort)raw10);
 
                     double currentRead = channel == 1 ? _bath1OffsetCur : _bath2OffsetCur;
-                    string src = reason != null && reason.StartsWith("MANUAL", StringComparison.OrdinalIgnoreCase) ? "MANUAL" : "AUTO";
+                    ApplyOffsetWriteRateLimit(channel, src, reason);
                     TraceModbus($"[WRITE START] src={src} channel={channel} desired={appliedOffset.ToString("0.0", CultureInfo.InvariantCulture)} currentRead={currentRead.ToString("0.0", CultureInfo.InvariantCulture)} thread={Thread.CurrentThread.ManagedThreadId}");
                     TraceModbus("[INFO] ACK disabled - using readback verification only");
 
@@ -359,7 +425,7 @@ namespace ThermoBathCalibrator
                         return false;
                     }
 
-                    bool verified = TryReadbackAfterWrite(channel: channel, desiredOffset: appliedOffset, out double readback);
+                    bool verified = TryReadbackAfterWrite(channel: channel, desiredOffset: appliedOffset, reason: src, out double readback);
                     TraceModbus($"[WRITE VERIFY] readback={readback.ToString("0.0", CultureInfo.InvariantCulture)} success={verified.ToString().ToLowerInvariant()}");
 
                     if (!verified)
@@ -389,7 +455,7 @@ namespace ThermoBathCalibrator
                         _lastWriteCh2 = DateTime.Now;
                     }
 
-                    if (src == "MANUAL")
+                    if (string.Equals(src, "manual", StringComparison.OrdinalIgnoreCase))
                     {
                         DateTime holdUntil = DateTime.Now.AddSeconds(60);
                         if (channel == 1) _manualHoldUntilCh1 = holdUntil;
@@ -507,15 +573,16 @@ namespace ThermoBathCalibrator
                 _inWriteSequence = true;
                 try
                 {
+                    string src = ResolveCallerTag(reason);
+
                     if (!_mb.IsConnected)
                     {
-                        _boardConnected = TryConnectWithCooldown();
-                        if (!_boardConnected) _boardFailCount++;
+                        _ = TryConnectWithCooldown(src);
                     }
 
                     if (!_mb.IsConnected)
                     {
-                        _boardConnected = false;
+                        SetBoardConnectionState(false, false);
                         TraceModbus($"[SV WRITE RESULT] FAIL reason=not_connected src={reason} channel={channel}");
                         return false;
                     }
@@ -523,12 +590,12 @@ namespace ThermoBathCalibrator
                     short raw10 = (short)Math.Round(coarseSv * 10.0, MidpointRounding.AwayFromZero);
                     ushort svWord = unchecked((ushort)raw10);
 
-                    TraceModbus($"[SV WRITE START] src={reason} channel={channel} desired={coarseSv.ToString("0.0", CultureInfo.InvariantCulture)} thread={Thread.CurrentThread.ManagedThreadId}");
+                    TraceModbus($"[SV WRITE START] src={src} channel={channel} desired={coarseSv.ToString("0.0", CultureInfo.InvariantCulture)} thread={Thread.CurrentThread.ManagedThreadId}");
                     TraceModbus("[INFO] ACK disabled - using readback verification only");
 
                     if (!TryWriteSvSequenceNoAck(channel, svWord, reason, raw10, out string sequenceErr))
                     {
-                        TraceModbus($"[SV WRITE RESULT] FAIL reason={sequenceErr} src={reason} channel={channel}");
+                        TraceModbus($"[SV WRITE RESULT] FAIL reason={sequenceErr} src={src} channel={channel}");
                         return false;
                     }
 
@@ -543,7 +610,7 @@ namespace ThermoBathCalibrator
                         _trackedCoarseSvCh2 = coarseSv;
                     }
 
-                    TraceModbus($"[SV WRITE RESULT] SUCCESS src={reason} channel={channel} coarse={coarseSv.ToString("0.0", CultureInfo.InvariantCulture)}");
+                    TraceModbus($"[SV WRITE RESULT] SUCCESS src={src} channel={channel} coarse={coarseSv.ToString("0.0", CultureInfo.InvariantCulture)}");
                     return true;
                 }
                 finally
@@ -658,13 +725,15 @@ namespace ThermoBathCalibrator
             return true;
         }
 
-        private bool TryReadbackAfterWrite(int channel, double desiredOffset, out double readback)
+        private bool TryReadbackAfterWrite(int channel, double desiredOffset, string reason, out double readback)
         {
             readback = double.NaN;
             DateTime begin = DateTime.UtcNow;
+            int attempt = 0;
 
             while ((DateTime.UtcNow - begin).TotalMilliseconds < AckTimeoutMs)
             {
+                attempt++;
                 if (TryReadOffsetFromDevice(channel, out readback))
                 {
                     double diff = Math.Abs(readback - desiredOffset);
@@ -674,16 +743,81 @@ namespace ThermoBathCalibrator
                         return true;
                     }
 
-                    TraceModbus($"OFFSET WRITE VERIFY WAIT ch={channel} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} read={readback.ToString("0.0", CultureInfo.InvariantCulture)} diff={diff.ToString("0.000", CultureInfo.InvariantCulture)}");
+                    TraceModbus($"OFFSET WRITE VERIFY WAIT src={reason} ch={channel} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} read={readback.ToString("0.0", CultureInfo.InvariantCulture)} diff={diff.ToString("0.000", CultureInfo.InvariantCulture)} attempt={attempt}");
                 }
 
-                Thread.Sleep(AckPollIntervalMs);
+                int pollDelayMs = Math.Min(AckPollIntervalMs + ((attempt - 1) * AckPollBackoffStepMs), AckPollIntervalMaxMs);
+                Thread.Sleep(pollDelayMs);
             }
 
-            TraceModbus($"OFFSET WRITE VERIFY TIMEOUT ch={channel} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} read={readback.ToString("0.0", CultureInfo.InvariantCulture)}");
+            TraceModbus($"OFFSET WRITE VERIFY TIMEOUT src={reason} ch={channel} desired={desiredOffset.ToString("0.0", CultureInfo.InvariantCulture)} read={readback.ToString("0.0", CultureInfo.InvariantCulture)}");
             return false;
         }
 
+        private int CalculateReconnectBackoffMs(int failStreak)
+        {
+            int computed = ReconnectCooldownMs + (Math.Max(0, failStreak) * ReconnectBackoffStepMs);
+            return Math.Min(computed, ReconnectBackoffMaxMs);
+        }
+
+        private void SetBoardConnectionState(bool connected, bool increaseFailCount)
+        {
+            lock (_commStateSync)
+            {
+                _boardConnected = connected;
+                if (increaseFailCount) _boardFailCount++;
+            }
+        }
+
+        private string ResolveCallerTag(string reason)
+        {
+            string upper = (reason ?? string.Empty).ToUpperInvariant();
+            if (upper.Contains("MANUAL")) return "manual";
+            if (upper.Contains("SETTING")) return "settings";
+            if (upper.Contains("ADMIN")) return "admin";
+            if (upper.Contains("AUTO")) return "auto";
+            if (upper.Contains("WORKER")) return "worker";
+            if (upper.Contains("READBACK")) return "worker";
+            return "unknown";
+        }
+
+        private void ApplyOffsetWriteRateLimit(int channel, string src, string reason)
+        {
+            DateTime now = DateTime.UtcNow;
+            DateTime lastRequestUtc;
+            int waitMs = 0;
+
+            lock (_commStateSync)
+            {
+                lastRequestUtc = channel == 1 ? _lastWriteRequestUtcCh1 : _lastWriteRequestUtcCh2;
+                if (lastRequestUtc != DateTime.MinValue)
+                {
+                    int elapsedMs = (int)(now - lastRequestUtc).TotalMilliseconds;
+                    if (elapsedMs < OffsetWriteMinIntervalMs)
+                    {
+                        waitMs = OffsetWriteMinIntervalMs - elapsedMs;
+                    }
+                }
+            }
+
+            if (waitMs > 0)
+            {
+                TraceModbus($"[WRITE RATE LIMIT] action=delay src={src} reason={reason} channel={channel} delayMs={waitMs}");
+                Thread.Sleep(waitMs);
+            }
+
+            lock (_commStateSync)
+            {
+                DateTime applied = DateTime.UtcNow;
+                if (channel == 1) _lastWriteRequestUtcCh1 = applied;
+                else _lastWriteRequestUtcCh2 = applied;
+            }
+
+            if (waitMs <= 0)
+            {
+                TraceModbus($"[WRITE RATE LIMIT] action=pass src={src} reason={reason} channel={channel} delayMs=0");
+            }
+        }
         private bool TryReadResponseRegister(int channel, out ushort response, out string error)
         {
             response = 0;
